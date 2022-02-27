@@ -1,0 +1,2061 @@
+---
+title: "CDC Analysis"
+output: html_notebook
+---
+
+```{r Load Data and Packages}
+source("functions_parameters.R")
+
+# Read in DIA-NN search from DIA Bulk CDC data
+data_path <- "../dat/raw_data/Mon_and_Mel.tsv" 
+evi <- read.delim(data_path)
+
+#Load Meta data for updating
+meta <- read.csv('../dat/Proccessed_data/meta.csv',row.names = 1)
+meta_mel <- meta %>% filter(celltype == 'm')
+meta_mon <- meta %>% filter(celltype == 'u')
+
+meta_mel_C1 <- meta_mel %>% filter(sub == 'C1')
+meta_mel_C2 <- meta_mel %>% filter(sub == 'C2')
+
+#Single Cell Data
+t3 <- read.csv('../dat/Proccessed_data/t3.csv',row.names = 1)
+pep_to_prot <- read.csv('../dat/Proccessed_data/pep_to_prot.csv',row.names = 1)
+t7 <- read.csv('../dat/Proccessed_data/t7.csv',row.names = 1)
+#t7_Monocytes <- read.csv('../dat/Proccessed_data/t7_Monocytes.csv',row.names = 1)
+#t7_Melanomas <- read.csv('../dat/Proccessed_data/t7_Melanomas.csv',row.names = 1)
+#t7_Melanomas_Large <- read.csv('../dat/Proccessed_data/t7_Melanomas_Large.csv',row.names = 1)
+#t7_Melanomas_Small <- read.csv('../dat/Proccessed_data/t7_Melanomas_Small.csv',row.names = 1)
+
+t7_Monocytes <- t7 %>% dplyr::select(intersect(colnames(t7),meta_mon$id))
+t7_Melanomas <- t7 %>% dplyr::select(intersect(colnames(t7),meta_mel$id))
+
+t7_Melanomas_Large <- t7 %>% dplyr::select(intersect(colnames(t7),meta_mel_C1$id))
+t7_Melanomas_Small <- t7 %>% dplyr::select(intersect(colnames(t7),meta_mel_C2$id))
+
+
+# Databases for Protein Set Enrichment Analysis
+GO_db <- read.delim("../dat/raw_data/GOA_db.txt", sep = " ")
+
+
+```
+
+Here we are plotting the distributions of intensities for FACS sorting of cells based of DNA content 
+```{r Flow Data}
+library(flowCore)
+#loading FACS Data
+FCS_Mel <- read.FCS('../dat/FACS/Mel.fcs')
+FCS_Mon <- read.FCS('../dat/FACS/Mon.fcs')
+FCS_Mel <- as.data.frame(FCS_Mel@exprs)
+FCS_Mon <- as.data.frame(FCS_Mon@exprs)
+
+colnames(FCS_Mel)[24] <- 'DNA_Content'
+colnames(FCS_Mon)[24] <- 'DNA_Content'
+
+#plot(log10(FCS_Mon$`FSC-A`),log10(FCS_Mon$`SSC-A`))
+
+# Applying Gates dor doublets 
+FCS_Mel <- FCS_Mel %>% dplyr::filter(DNA_Content >100000)
+FCS_Mel <- FCS_Mel %>% dplyr::filter(log10(`FSC-A`) >5.92)
+
+FCS_Mon <- FCS_Mon %>% dplyr::filter(DNA_Content >100000)
+FCS_Mon <- FCS_Mon %>% dplyr::filter(log10(`FSC-A`) >6.01)                           
+FCS_Mon <- FCS_Mon %>% dplyr::filter(log10(`FSC-A`) <6.3)  
+
+  
+Mon_DNA <- ggplot(FCS_Mon,aes(x =DNA_Content, fill =  'DNA_Content')) + geom_histogram(bins = 100) + 
+  xlim(c(400000,1.56*10^6))+theme_classic()+ scale_fill_manual(values = '#007A39')+ 
+  ylab('# of cells') + xlab('DNA content')+rremove('legend')+
+  theme(axis.title=element_text(size=26),text=element_text(size=0))
+
+Mel_DNA <- ggplot(FCS_Mel,aes(x =DNA_Content, fill =  'DNA_Content')) + geom_histogram(bins = 100) + 
+  xlim(c(400000,1.56*10^6))+theme_classic()+ scale_fill_manual(values = '#F6BE00')+ 
+  ylab('# of cells') + xlab('DNA content')+rremove('legend')+
+  theme(axis.title=element_text(size=26),text=element_text(size=0))
+
+Mel_DNA
+Mon_DNA
+
+ggsave("../figs/CDC/Mel_DNA.png",plot = Mel_DNA,width = unit(6, "cm"),height =  unit(5, "cm"))
+ggsave("../figs/CDC/Mon_DNA.png",plot = Mon_DNA,width = unit(6, "cm"),height =  unit(5, "cm"))
+
+detach("package:flowCore", unload=TRUE)
+```
+
+In this step were are looking at the FACS data to find proteins whose abundance is upregulated in G1, S, or G2 phase of the cell cycle. 
+```{r Bulk CDC Markers}
+
+#Annotations for different runs
+#Melanoma CDC populations
+G1_M <- "wAL00162" 
+S_M <- "wAL00163" 
+G2_M <- "wAL00164" 
+
+#Monocyte CDC populations
+G1_U <- "wAL00158" 
+S_U <- "wAL00159" 
+G2_U <- "wAL00160" 
+
+#unique precursor Identifiers
+evi$seqcharge <- paste0(evi$Precursor.Id)
+
+# Data Processing, Protein x Sample matrix for Melanoma cells
+evi1_mel <- evi %>% filter(Run == G1_M)
+evi1_mel <- evi1_mel %>% filter(Ms1.Area != 0)
+evi1_mel <- evi1_mel %>% filter(is.na(Ms1.Area) == F)
+evi2_mel <- evi %>% filter(Run == S_M)
+evi2_mel <- evi2_mel %>% filter(Ms1.Area != 0)
+evi2_mel <- evi2_mel %>% filter(is.na(Ms1.Area) == F)
+evi3_mel <- evi %>% filter(Run == G2_M)
+evi3_mel <- evi3_mel %>% filter(Ms1.Area != 0)
+evi3_mel <- evi3_mel %>% filter(is.na(Ms1.Area) == F)
+
+sect <- intersect(evi1_mel$seqcharge,evi2_mel$seqcharge)
+sect <- intersect(sect,evi3_mel$seqcharge)
+
+evi_mels <- rbind(evi1_mel,evi2_mel,evi3_mel)
+evi_mels <- evi_mels %>% filter(seqcharge %in% sect)
+
+evi_mels <- evi_mels %>% group_by(Run) %>% mutate("col_norm_peptide" = Ms1.Area/median(Ms1.Area))
+
+evi_mels$Ms1.Area <- NULL
+
+evi_mels.d <- dcast(evi_mels, Protein.Group + seqcharge ~Run,value.var = 'col_norm_peptide')
+
+colnames(evi_mels.d)[3:5] <- c('G1','S','G2')
+med <- rowMeans(evi_mels.d[3:5],na.rm = T)
+evi_mels.d$G1 <- evi_mels.d$G1/med
+evi_mels.d$S <- evi_mels.d$S/med
+evi_mels.d$G2 <- evi_mels.d$G2/med
+
+evi_mels <- melt(evi_mels.d,id = c('Protein.Group','seqcharge'))
+
+
+
+# Data Processing, Protein x Sample matrix for Monocyte cells
+evi1_mons <- evi %>% filter(Run == G1_U)
+evi1_mons <- evi1_mons %>% filter(Ms1.Area != 0)
+evi1_mons <- evi1_mons %>% filter(is.na(Ms1.Area) == F)
+evi2_mons <- evi %>% filter(Run == S_U)
+evi2_mons <- evi2_mons %>% filter(Ms1.Area != 0)
+evi2_mons <- evi2_mons %>% filter(is.na(Ms1.Area) == F)
+evi3_mons <- evi %>% filter(Run == G2_U)
+evi3_mons <- evi3_mons %>% filter(Ms1.Area != 0)
+evi3_mons <- evi3_mons %>% filter(is.na(Ms1.Area) == F)
+
+sect <- intersect(evi1_mons$seqcharge,evi2_mons$seqcharge)
+sect <- intersect(sect,evi3_mons$seqcharge)
+
+evi_mons <- rbind(evi1_mons,evi2_mons,evi3_mons)
+evi_mons <- evi_mons %>% filter(seqcharge %in% sect)
+
+evi_mons <- evi_mons %>% group_by(Run) %>% mutate("col_norm_peptide" = Ms1.Area/median(Ms1.Area))
+
+evi_mons$Ms1.Area <- NULL
+
+
+evi_mons.d <- dcast(evi_mons, Protein.Group + seqcharge ~Run,value.var = 'col_norm_peptide')
+
+colnames(evi_mons.d)[3:5] <- c('G1','S','G2')
+
+med <- rowMeans(evi_mons.d[3:5],na.rm = T)
+evi_mons.d$G1 <- evi_mons.d$G1/med
+evi_mons.d$S <- evi_mons.d$S/med
+evi_mons.d$G2 <- evi_mons.d$G2/med
+evi_mons <- melt(evi_mons.d,id = c('Protein.Group','seqcharge'))
+
+
+
+## Find Differential Cell Cycle Proteins by cell type using both peptides from same 
+## protein and the different cell types as independent measurements
+
+evi_mons$Condition <- 'Monocyte'
+evi_mels$Condition <- 'Melanoma'
+
+evi_all <- rbind(evi_mons,evi_mels)
+evi_all <- evi_all %>% filter(is.na(value)==F)
+evi_all <- evi_all %>% filter(value!= 1)
+evi_all$value <- log2(evi_all$value)
+
+diff_prot_output <- data.frame(Protein = character(), pVal = numeric(),G1= numeric(),S = numeric(),G2= numeric(),effect_size = numeric(),stringsAsFactors = FALSE)
+
+for (i in 1:length(unique(evi_all$Protein.Group))){
+  evi_hold <- evi_all %>% filter(Protein.Group == unique(evi_all$Protein.Group)[i])
+  if(nrow(evi_hold) > 5){
+    if(length(unique(evi_hold$Condition)) > 1){
+        test <- aov(value~variable, data = evi_hold)
+        test <- summary(test)
+        test <- data.frame(test[[1]])
+        pVal <-test[1,5]
+        evi_hold <- evi_hold %>% dplyr::select(Protein.Group,variable,value)
+        evi_hold <- suppressMessages(evi_hold %>% group_by(variable,Protein.Group) %>% summarize(value = median(value,na.rm = T)))
+        evi_hold <- dcast(evi_hold, Protein.Group~variable,value.var = 'value')
+        diff_prot_output[i,1] <- unique(evi_all$Protein.Group)[i]
+        diff_prot_output[i,2] <- pVal 
+        diff_prot_output[i,3] <- evi_hold$G1
+        diff_prot_output[i,4] <- evi_hold$S
+        diff_prot_output[i,5] <- evi_hold$G2
+        diff_prot_output[i,6] <- abs(evi_hold$S)+abs(evi_hold$G2) + abs(evi_hold$G2)
+    }
+  }
+}
+
+diff_prot_output <- diff_prot_output %>% filter(is.na(Protein)==F)
+
+diff_prot_output$qVal <- p.adjust(diff_prot_output$pVal,method = 'BH')
+diff_prot_output_filt <-diff_prot_output %>% filter(qVal < .05)
+
+
+
+## Finding proteins with peptides that correlate positively in Monocytes
+## This is a way of narrowing down what proteins to use for cell cycle analysis markers
+
+# parse_row<-grep("|",ev.melt.pep$protein, fixed=T)
+# if(length(parse_row)>0){
+#   split_prot<-str_split(ev.melt.pep$protein[parse_row], pattern = fixed("|"))
+#   split_prot2<-unlist(split_prot)[seq(2,3*length(split_prot),3)]
+#   ev.melt.pep$protein[parse_row]<-split_prot2
+# }
+
+t3m<-data.frame(t3)
+t3m <- t3m %>% dplyr::select(colnames(t7_Monocytes))
+t3m$pep<-rownames(t3)
+t3m$prot <- pep_to_prot$prot[match(t3m$pep, pep_to_prot$pep)]
+cors <- c()
+count <- 0
+
+#variable for proteins who have sufficiently  correlated peptides
+good_prot <- c()
+store <- c()
+
+for (i in 1:length(unique(t3m$prot))){
+  prots <- t3m %>% filter(prot == unique(t3m$prot)[i])
+  if (nrow(prots)>1){
+    count <- count+1
+    prots$pep <- NULL
+    prots$prot <- NULL
+    cor_mat <- cor(t(prots), use = 'pairwise.complete.obs', method = c('spearman'))
+    cor_mat <- cor_mat[lower.tri(cor_mat)]
+    if (is.na(median(cor_mat,na.rm = T)) ==F){
+      if((median(cor_mat,na.rm = T) > .1) == T){
+        good_prot <- c(good_prot,unique(t3m$prot)[i])
+      }
+    }
+    cors <- c(cors,cor_mat)
+  }
+}
+
+
+
+## Selecting ~20 proteins to make CDC markers for Each Phase 
+G1_df <- diff_prot_output_filt %>% filter(G1 > G2)
+G1_df <- G1_df %>% filter(G1 > S)
+G1_df <- G1_df[order(-G1_df$G1),]
+G1_df <- G1_df %>% filter(Protein %in% good_prot)
+G1_df_final <- G1_df[1:20,]
+
+
+S_df <- diff_prot_output_filt %>% filter(S > G2)
+S_df <- S_df %>% filter(S > G1)
+S_df <- S_df[order(-S_df$S),]
+#S_df <- S_df %>% filter(Protein %in% CC_convert$Entry)
+S_df <- S_df %>% filter(Protein %in% good_prot)
+#S_df <- S_df %>% filter(Protein != 'P27816')
+S_df_final <- S_df[1:20,]
+
+G2_df <- diff_prot_output_filt %>% filter(G2 > S)
+G2_df <- G2_df %>% filter(G2 > G1)
+G2_df <- G2_df[order(-G2_df$G2),]
+#G2_df <- G2_df %>% filter(Protein %in% CC_convert$Entry)
+#G2_df <- G2_df %>% filter(Protein %in% rownames(t7_Monocytes))
+G2_df <- G2_df %>% filter(Protein %in% good_prot)
+G2_df_final <- G2_df[1:20,]
+
+G1_prots <- G1_df_final$Protein
+S_prots <- S_df_final$Protein
+G2_prots <- G2_df_final$Protein
+
+
+#intersect(S_df_final$Protein,S_prots_prev$V1)
+
+#G1_prots_prev <- read.delim('/Users/andrewleduc/Desktop/hold/G1_prots.txt',header = F)
+#S_prots_prev <- read.delim('/Users/andrewleduc/Desktop/hold/S_prots.txt',header = F)
+#G2_prots_prev <- read.delim('/Users/andrewleduc/Desktop/hold/G2_prots.txt',header = F)
+
+
+write(G1_prots,'../dat/Proccessed_data/G1_prots.txt')
+write(S_prots,'../dat/Proccessed_data/S_prots.txt')
+write(G2_prots,'../dat/Proccessed_data/G2_prots.txt')
+
+
+
+
+```
+
+
+```{r Bulk GSEA}
+evi_mons_prot <- evi_mons
+evi_mons_prot$seqcharge <- NULL
+evi_mons_prot <- evi_mons_prot %>% group_by(Protein.Group,variable) %>% summarise(value = median(value,na.rm = T))
+
+evi_mels_prot <- evi_mels
+evi_mels_prot$seqcharge <- NULL
+evi_mels_prot <- evi_mels_prot %>% group_by(Protein.Group,variable) %>% summarise(value = median(value,na.rm = T))
+
+
+#Column (sample size) normalize
+
+evi_mons_prot <- evi_mons_prot %>% group_by(variable) %>% mutate(value = value/median(value,na.rm=T))
+
+evi_mels_prot <- evi_mels_prot %>% group_by(variable) %>% mutate(value = value/median(value,na.rm=T))
+
+
+#Row (Relative Quant) normalize
+evi_mons_prot <- evi_mons_prot %>% group_by(Protein.Group) %>% mutate(value = value/mean(value,na.rm=T))
+
+evi_mels_prot <- evi_mels_prot %>% group_by(Protein.Group) %>% mutate(value = value/mean(value,na.rm=T))
+
+colnames(evi_mels_prot) <- c('Protein','Condition','Intensity')
+colnames(evi_mons_prot) <- c('Protein','Condition','Intensity')
+
+evi_mons_prot$SampID <- 'Monocyte'
+evi_mels_prot$SampID <- 'Melanoma'
+
+ev_both <- rbind(evi_mels_prot,evi_mons_prot)
+ev_both$Intensity <- log2(ev_both$Intensity)
+Bulk_GSEA <- Population_GSEA(ev_both,GO_db,3)
+Bulk_GSEA$FDR <- p.adjust(Bulk_GSEA$pVal,method = 'BH')
+Bulk_GSEA <- Bulk_GSEA %>% filter(FDR < .01)
+colnames(Bulk_GSEA)[5:7] <- c('G1','S','G2')
+Bulk_GSEA <- Bulk_GSEA[order(Bulk_GSEA$pVal),]
+
+write.csv(Bulk_GSEA,'/Users/andrewleduc/Desktop/nPOP_Paper/dat/Bulk_CDC_GSEA.csv')
+write.csv(evi_mons_prot,'/Users/andrewleduc/Desktop/nPOP_Paper/dat/Bulk_Monocyte_CDC_Protein.csv')
+write.csv(evi_mels_prot,'/Users/andrewleduc/Desktop/nPOP_Paper/dat/Bulk_Melanoma_CDC_Protein.csv')
+```
+
+```{r Phase Marker Construction}
+
+# CDC protein specific matricies
+G1_sub <- t7_Monocytes %>% filter(rownames(t7_Monocytes)%in% G1_prots)
+S_sub <- t7_Monocytes %>% filter(rownames(t7_Monocytes)%in%S_prots)
+G2_sub <- t7_Monocytes %>% filter(rownames(t7_Monocytes)%in%G2_prots)
+
+G1_sub <- as.matrix(G1_sub)
+S_sub <- as.matrix(S_sub)
+G2_sub <- as.matrix(G2_sub)
+
+CC_sub3 <- list(G1_sub,S_sub,G2_sub)
+
+
+
+# Matrices for storing phase markers
+CC_fill_sub1 <- list(as.data.frame(matrix(data = NA,nrow = 1,ncol = ncol(G1_sub))),as.data.frame(matrix(data = NA,nrow = 1,ncol = ncol(G1_sub))),as.data.frame(matrix(data = NA,nrow = 1,ncol = ncol(G1_sub))))
+
+count <- 1
+count2 <- 1
+
+#store proteins in markers
+prot_L <-c()
+
+
+# This for loop forms all possible combinations (averaging abundance into one vector) of two or 3 proteins
+# within a phase and correlates all of these different constructed markers. We select the markers that
+# correlate with each other and pass an arbitrary significance threshold 
+#
+
+for(i in 1:3){ 
+  phase3 <- CC_sub3[[i]]
+  mark_cor_hold <- 0
+  count2 <- 1
+  print(i)
+  for(j in 2:3){
+    # These are the combinations of all possible ways to combine 2 or 3 
+    #proteins at a time into a phase marker
+    choose <- combn(nrow(phase3),j)
+    choose2 <-combn(length(choose[1,]),2) 
+    for (k in 1:(length(choose2[1,]))){
+      #Making sure two paired phase markers dont contain same proteins
+       if (length(intersect(choose[,choose2[1,k]],choose[,choose2[2,k]])) == 0){
+          mark1 <- colMeans(phase3[choose[,choose2[1,k]],],na.rm = T)
+          prot1 <- rownames(phase3[choose[,choose2[1,k]],])
+          mark2 <- colMeans(phase3[choose[,choose2[2,k]],],na.rm = T)
+          prot2 <- rownames(phase3[choose[,choose2[2,k]],])
+          mark_cor <- cor(mark1,mark2,use = 'pairwise.complete.obs')
+          if(is.na(mark_cor)==T){
+            mark_cor=0
+          }
+        # Here we store the markers from two of the subsets that are used for marker generation
+        if(mark_cor > .2){
+          if(i == 2){
+            sig <- cor.test(mark1,mark2,method = "spearman",exact=FALSE)$p.value
+            if(sig < .00001){
+              
+            CC_fill_sub1[[i]][(2*count2),] <- colMeans(phase3[choose[,choose2[1,k]],],na.rm = T)
+            prot1 <- paste0(prot1[1],'-',prot1[2],'-',prot1[3])
+            CC_fill_sub1[[i]][(2*count2-1),] <- colMeans(phase3[choose[,choose2[2,k]],],na.rm = T)
+            prot2 <- paste0(prot2[1],'-',prot2[2],'-',prot2[3])
+            
+            prot_L <- c(prot_L,prot1,prot2)
+            count2 <- 1+count2
+            
+            }
+          }
+          else if(i == 1){
+            sig <- cor.test(mark1,mark2,method = "spearman",exact=FALSE)$p.value
+            if(sig < .000000005){
+            
+            CC_fill_sub1[[i]][(2*count2),] <- colMeans(phase3[choose[,choose2[1,k]],],na.rm = T)
+            prot1 <- paste0(prot1[1],'-',prot1[2],'-',prot1[3])
+            CC_fill_sub1[[i]][(2*count2-1),] <- colMeans(phase3[choose[,choose2[2,k]],],na.rm = T)
+            prot2 <- paste0(prot2[1],'-',prot2[2],'-',prot2[3])
+            
+            prot_L <- c(prot_L,prot1,prot2)
+            count2 <- 1+count2
+            
+            }
+          }
+          else if(i==3){
+            count <- count+ 1
+            sig <- cor.test(mark1,mark2,method = "spearman",exact=FALSE)$p.value
+            if(sig < .0001){
+              count2 <- 1+count2
+              CC_fill_sub1[[i]][(2*count2),] <- colMeans(phase3[choose[,choose2[1,k]],],na.rm = T)
+              prot1 <- paste0(prot1[1],'-',prot1[2],'-',prot1[3])
+              CC_fill_sub1[[i]][(2*count2-1),] <- colMeans(phase3[choose[,choose2[2,k]],],na.rm = T)
+              prot2 <- paste0(prot2[1],'-',prot2[2],'-',prot2[3])
+              
+              prot_L <- c(prot_L,prot1,prot2)
+              
+            }
+          }
+        }
+     }
+    }
+  }
+}
+
+
+# Individual matrices that store the correlated pairs of markers
+mG1 <- (CC_fill_sub1[[1]])
+mS <- (CC_fill_sub1[[2]])
+mG2 <- (CC_fill_sub1[[3]])
+
+```
+
+```{r Find marker combinations that anti-correlate out of phases}
+a_hold <- 1
+mat_dif_hold <- 0
+mark_mat <- matrix(data = NA,nrow = 6,ncol = ncol(G1_sub3))
+mark_mat_new <- matrix(data = NA,nrow = 6,ncol = ncol(G1_sub1))
+dist_stor <- c()
+its <- 0
+i_t <- c()
+j_t <- c()
+k_t <- c()
+
+
+for(i in 1:(nrow(mG1)/2)){
+  mark_mat[1:2,] <- as.matrix(mG1[(i*2-1):(i*2),])
+  print(i)
+  for (j in 1:(nrow(mS)/2)){
+    mark_mat[3:4,] <- as.matrix(mS[(j*2-1):(j*2),])
+    for (k in 1:(nrow(mG2)/2)){
+      mark_mat[5:6,] <- as.matrix(mG2[(k*2-1):(k*2),])
+      a <-cor(t(mark_mat),use = 'pairwise.complete.obs')
+      a <- a[lower.tri(a)]
+      b <- c(a[2:9],a[11:14])
+
+      b <- median(b)
+      if(is.na(b)==T){
+        b=1
+      }
+      
+      if(b < -.06){
+        i_s <- i
+        j_s <- j
+        k_s <- k
+        a_hold <- b
+        mat_save <- mark_mat
+        mark_mat_new[1:2,] <- as.matrix(m2_G1[(i*2-1):(i*2),])
+        mark_mat_new[3:4,] <- as.matrix(m2_S[(j*2-1):(j*2),])
+        mark_mat_new[5:6,] <- as.matrix(m2_G2[(k*2-1):(k*2),])
+        
+        d <- cor(t(mark_mat_new),use = 'pairwise.complete.obs')
+        d <- d[lower.tri(d)]
+        mat_dif <- cor(d,a)
+        
+        dist_stor <- c(dist_stor,mat_dif)
+        
+        if(mat_dif > 0){
+          i_t <- c(i_t,i)
+          j_t <- c(j_t,j)
+          k_t <- c(k_t,k)
+          mat_dif_hold <- mat_dif
+          print(mat_dif_hold)
+          mat_save_2 <- mark_mat_new
+          mat_save_3 <- mark_mat
+          its <- its+1
+          
+          
+        }
+        #if((mat_dif) > (mat_dif_hold)){
+        #   mat_dif_hold <- mat_dif
+        #   i_u <- i
+        #   j_u <- j
+        #   k_u <- k
+        #   
+        # }
+      }
+    }
+  }
+}
+
+
+
+
+rownames(mat_save_3) <- c('marker1_G1','marker2_G1','marker1_S','marker2_S','marker1_G2','marker2_G2')
+Heatmap(cor(t(mat_save_3),use = 'pairwise.complete.obs'),cluster_rows = F,cluster_columns = F,col=colorRamp2(c(-.5, 0, .5), c("blue", "white", "red")))
+rownames(mat_save_2) <- c('marker1_G1','marker2_G1','marker1_S','marker2_S','marker1_G2','marker2_G2')
+Heatmap(cor(t(mat_save_2),use = 'pairwise.complete.obs'),cluster_rows = F,cluster_columns = F,col=colorRamp2(c(-.5, 0, .5), c("blue", "white", "red")))
+```
+
+```{r Store proteins from markers for Protein Set Enrichment Analysis}
+U_markG1 <- list()
+U_markS <- list()
+U_markG2 <- list()
+
+M_markG1 <- list()
+M_markS <- list()
+M_markG2 <- list()
+
+length(i_t)
+cors <- c()
+null_d <- c()
+count <- 0
+for(i in 140:(length(i_t)-2)){
+
+  
+  count <- count+1
+  
+  G1_mark1 <- prot_L[i_t[length(i_t)-i]*2]
+  G1_mark2 <- prot_L[i_t[length(i_t)-i]*2-1]
+  
+  S_mark1 <- prot_L[nrow(mG1)+j_t[length(j_t)-i]*2]
+  S_mark2 <- prot_L[nrow(mG1)+j_t[length(j_t)-i]*2-1]
+  
+  G2_mark1 <- prot_L[nrow(mG1)+nrow(mS)+k_t[length(k_t)-i]*2]
+  G2_mark2 <- prot_L[nrow(mG1)+nrow(mS)+k_t[length(k_t)-i]*2-1]
+  
+  
+  G1_mark1 <- unlist(str_split(G1_mark1,'-'))
+  G1_mark2 <- unlist(str_split(G1_mark2,'-'))
+  S_mark1 <- unlist(str_split(S_mark1,'-'))
+  S_mark2 <- unlist(str_split(S_mark2,'-'))
+  G2_mark1 <- unlist(str_split(G2_mark1,'-'))
+  G2_mark2 <- unlist(str_split(G2_mark2,'-'))
+  
+  #t4b3 <- t7_Monocytes %>% dplyr::select(Monocytes$id)#[order_3])
+  #t4b3 <- t7_Melanomas %>% dplyr::select(Melanoma$id)
+  
+  
+  new_G1_1_mon <- t7_Monocytes %>% dplyr::filter(rownames(t7_Monocytes) %in% G1_mark1)
+  new_G1_2_mon <-t7_Monocytes %>% dplyr::filter(rownames(t7_Monocytes) %in% G1_mark2)
+  
+  new_S_1_mon <-t7_Monocytes %>% dplyr::filter(rownames(t7_Monocytes) %in% S_mark1)
+  new_S_2_mon <-t7_Monocytes %>% dplyr::filter(rownames(t7_Monocytes) %in% S_mark2)
+  
+  new_G2_1_mon <-t7_Monocytes %>% dplyr::filter(rownames(t7_Monocytes) %in% G2_mark1)
+  new_G2_2_mon <-t7_Monocytes %>% dplyr::filter(rownames(t7_Monocytes) %in% G2_mark2)
+  
+  new_G1_1_mel <- t7_Melanomas %>% dplyr::filter(rownames(t7_Melanomas) %in% G1_mark1)
+  new_G1_2_mel <-t7_Melanomas %>% dplyr::filter(rownames(t7_Melanomas) %in% G1_mark2)
+  
+  new_S_1_mel <-t7_Melanomas %>% dplyr::filter(rownames(t7_Melanomas) %in% S_mark1)
+  new_S_2_mel <-t7_Melanomas %>% dplyr::filter(rownames(t7_Melanomas) %in% S_mark2)
+  
+  new_G2_1_mel <-t7_Melanomas %>% dplyr::filter(rownames(t7_Melanomas) %in% G2_mark1)
+  new_G2_2_mel <-t7_Melanomas %>% dplyr::filter(rownames(t7_Melanomas) %in% G2_mark2)
+  
+ 
+  #Monocyte Marker vectors
+  new_G1_1_mon <- colMeans(new_G1_1_mon,na.rm = T)
+  new_G1_2_mon <- colMeans(new_G1_2_mon,na.rm = T)
+  
+  new_S_1_mon <- colMeans(new_S_1_mon,na.rm = T)
+  new_S_2_mon <- colMeans(new_S_2_mon,na.rm = T)
+  
+  new_G2_1_mon <- colMeans(new_G2_1_mon,na.rm = T)
+  new_G2_2_mon <- colMeans(new_G2_2_mon,na.rm = T)
+  
+
+  #Melanoma Marker vectors
+  new_G1_1_mel <- colMeans(new_G1_1_mel,na.rm = T)
+  new_G1_2_mel <- colMeans(new_G1_2_mel,na.rm = T)
+  
+  new_S_1_mel <- colMeans(new_S_1_mel,na.rm = T)
+  new_S_2_mel <- colMeans(new_S_2_mel,na.rm = T)
+  
+  new_G2_1_mel <- colMeans(new_G2_1_mel,na.rm = T)
+  new_G2_2_mel <- colMeans(new_G2_2_mel,na.rm = T)
+  
+  
+  
+  
+  mark_mat_Mel <- matrix(data = NA,nrow = 6,ncol = ncol(t7_Melanomas))
+  mark_mat_Mon <- matrix(data = NA,nrow = 6,ncol = ncol(t7_Monocytes))
+
+  mark_mat_Mel[1,]<-new_G1_1_mel
+  mark_mat_Mel[2,]<-new_G1_2_mel
+  mark_mat_Mel[3,]<-new_S_1_mel
+  mark_mat_Mel[4,]<-new_S_2_mel
+  mark_mat_Mel[5,]<-new_G2_1_mel
+  mark_mat_Mel[6,]<-new_G2_2_mel
+
+  mark_mat_Mon[1,]<-new_G1_1_mon
+  mark_mat_Mon[2,]<-new_G1_2_mon
+  mark_mat_Mon[3,]<-new_S_1_mon
+  mark_mat_Mon[4,]<-new_S_2_mon
+  mark_mat_Mon[5,]<-new_G2_1_mon
+  mark_mat_Mon[6,]<-new_G2_2_mon
+
+  mark_mat_Mon_vect <- cor(t(mark_mat_Mon), use = 'pairwise.complete.obs')
+  mark_mat_Mon_vect <-   mark_mat_Mon_vect[lower.tri(mark_mat_Mon_vect,diag = F)]
+  mark_mat_Mel_vect <- cor(t(mark_mat_Mel), use = 'pairwise.complete.obs')
+  mark_mat_Mel_vect <- mark_mat_Mel_vect[lower.tri(mark_mat_Mel_vect,diag = F)]
+  cors <- c(cors,cor(mark_mat_Mel_vect,mark_mat_Mon_vect,use = 'pairwise.complete.obs',method = 'pearson'))
+  
+  mark_mat_Mon_null <- mark_mat_Mon
+  mark_mat_Mel_null <- mark_mat_Mel
+  for(i in 1:6){
+    mark_mat_Mon_null[i,] <- mark_mat_Mon_null[i,sample(1:ncol(mark_mat_Mon_null))]
+    mark_mat_Mel_null[i,] <- mark_mat_Mel_null[i,sample(1:ncol(mark_mat_Mel_null))]
+  }
+  mark_mat_Mon_vect <- cor(t(mark_mat_Mon_null), use = 'pairwise.complete.obs')
+  mark_mat_Mon_vect <-   mark_mat_Mon_vect[lower.tri(mark_mat_Mon_vect,diag = F)]
+  mark_mat_Mel_vect <- cor(t(mark_mat_Mel_null), use = 'pairwise.complete.obs')
+  mark_mat_Mel_vect <- mark_mat_Mel_vect[lower.tri(mark_mat_Mel_vect,diag = F)]
+  null_d <- c(null_d,cor(mark_mat_Mel_vect,mark_mat_Mon_vect,use = 'pairwise.complete.obs',method = 'pearson'))
+  
+  
+  U_markG1[[count]] <- rowMeans(cbind(new_G1_1_mon,new_G1_2_mon), na.rm=TRUE)
+  U_markS[[count]] <- rowMeans(cbind(new_S_1_mon,new_S_2_mon), na.rm=TRUE)
+  U_markG2[[count]] <-rowMeans(cbind(new_G2_1_mon,new_G2_1_mon), na.rm=TRUE)
+  
+  M_markG1[[count]] <- rowMeans(cbind(new_G1_1_mel,new_G1_2_mel), na.rm=TRUE)
+  M_markS[[count]] <-  rowMeans(cbind(new_S_1_mel,new_S_2_mel), na.rm=TRUE)
+  M_markG2[[count]] <- rowMeans(cbind(new_G2_1_mel,new_G2_2_mel), na.rm=TRUE)
+  
+}
+rownames(mark_mat_Mel) <- c('marker1_G1','marker2_G1','marker1_S','marker2_S','marker1_G2','marker2_G2')
+Mel_sc_heat <- Heatmap(cor(t(mark_mat_Mel),use = 'pairwise.complete.obs'),cluster_rows = F,cluster_columns = F,col=colorRamp2(c(-.5, 0, .5), c("blue", "white", "red")))
+
+rownames(mark_mat_Mon) <- c('marker1_G1','marker2_G1','marker1_S','marker2_S','marker1_G2','marker2_G2')
+Mon_sc_heat <- Heatmap(cor(t(mark_mat_Mon),use = 'pairwise.complete.obs'),cluster_rows = F,cluster_columns = F,col=colorRamp2(c(-.5, 0, .5), c("blue", "white", "red")))
+
+Mon_sc_heat
+Mel_sc_heat
+
+null_d <- as.data.frame(null_d)
+null_d$dist <- 'null'
+colnames(null_d)[1] <- 'Correlations'
+real <- as.data.frame(cors)
+real$dist <- 'Mat_sim'
+colnames(real)[1] <- 'Correlations'
+plot_dist <- rbind(real,null_d)
+ggplot(plot_dist,aes(x = Correlations,fill = dist)) + geom_histogram(position = 'identity', alpha = .5) + theme_classic()
+
+```
+
+```{r Making marker heatmaps}
+#Single Cell
+# rownames(mark_mat_Mel) <- c('marker1_G1','marker2_G1','marker1_S','marker2_S','marker1_G2','marker2_G2')
+# Mel_sc_heat <- Heatmap(cor(t(mark_mat_Mel),use = 'pairwise.complete.obs'),cluster_rows = F,cluster_columns = F,col=colorRamp2(c(-.4, 0, .4), c("blue", "white", "red")))
+# 
+# rownames(mark_mat_Mon) <- c('marker1_G1','marker2_G1','marker1_S','marker2_S','marker1_G2','marker2_G2')
+# Mon_sc_heat <- Heatmap(cor(t(mark_mat_Mon),use = 'pairwise.complete.obs'),cluster_rows = F,cluster_columns = F,col=colorRamp2(c(-.4, 0, .4), c("blue", "white", "red")))
+# 
+
+
+
+#Bulk
+evi_mons_prot_mat <- dcast(evi_mons_prot,Protein~Condition,value.var = 'Intensity')
+rownames(evi_mons_prot_mat) <- evi_mons_prot_mat$Protein
+evi_mons_prot_mat$Protein <- NULL
+evi_mels_prot_mat <- dcast(evi_mels_prot,Protein~Condition,value.var = 'Intensity')
+rownames(evi_mels_prot_mat) <- evi_mels_prot_mat$Protein
+evi_mels_prot_mat$Protein <- NULL
+
+new_G1_1_mon <- evi_mons_prot_mat %>% filter(rownames(evi_mons_prot_mat) %in% G1_mark1)
+new_G1_2_mon <-evi_mons_prot_mat %>% filter(rownames(evi_mons_prot_mat) %in% G1_mark2)
+
+new_S_1_mon <-evi_mons_prot_mat %>% filter(rownames(evi_mons_prot_mat) %in% S_mark1)
+new_S_2_mon <-evi_mons_prot_mat %>% filter(rownames(evi_mons_prot_mat) %in% S_mark2)
+
+new_G2_1_mon <-evi_mons_prot_mat %>% filter(rownames(evi_mons_prot_mat) %in% G2_mark1)
+new_G2_2_mon <-evi_mons_prot_mat %>% filter(rownames(evi_mons_prot_mat) %in% G2_mark2)
+
+new_G1_1_mel <- evi_mels_prot_mat %>% filter(rownames(evi_mels_prot_mat) %in% G1_mark1)
+new_G1_2_mel <-evi_mels_prot_mat %>% filter(rownames(evi_mels_prot_mat) %in% G1_mark2)
+
+new_S_1_mel <-evi_mels_prot_mat %>% filter(rownames(evi_mels_prot_mat) %in% S_mark1)
+new_S_2_mel <-evi_mels_prot_mat %>% filter(rownames(evi_mels_prot_mat) %in% S_mark2)
+
+new_G2_1_mel <-evi_mels_prot_mat %>% filter(rownames(evi_mels_prot_mat) %in% G2_mark1)
+new_G2_2_mel <-evi_mels_prot_mat %>% filter(rownames(evi_mels_prot_mat) %in% G2_mark2)
+
+
+#Monocyte Marker vectors
+new_G1_1_mon <- colMeans(new_G1_1_mon,na.rm = T)
+new_G1_2_mon <- colMeans(new_G1_2_mon,na.rm = T)
+
+new_S_1_mon <- colMeans(new_S_1_mon,na.rm = T)
+new_S_2_mon <- colMeans(new_S_2_mon,na.rm = T)
+
+new_G2_1_mon <- colMeans(new_G2_1_mon,na.rm = T)
+new_G2_2_mon <- colMeans(new_G2_2_mon,na.rm = T)
+
+
+#Melanoma Marker vectors
+new_G1_1_mel <- colMeans(new_G1_1_mel,na.rm = T)
+new_G1_2_mel <- colMeans(new_G1_2_mel,na.rm = T)
+
+new_S_1_mel <- colMeans(new_S_1_mel,na.rm = T)
+new_S_2_mel <- colMeans(new_S_2_mel,na.rm = T)
+
+new_G2_1_mel <- colMeans(new_G2_1_mel,na.rm = T)
+new_G2_2_mel <- colMeans(new_G2_2_mel,na.rm = T)
+
+mark_mat_Mel <- matrix(data = NA,nrow = 6,ncol = 3)
+mark_mat_Mon <- matrix(data = NA,nrow = 6,ncol = 3)
+mark_mat_Mel[1,]<-new_G1_1_mel
+mark_mat_Mel[2,]<-new_G1_2_mel
+mark_mat_Mel[3,]<-new_S_1_mel
+mark_mat_Mel[4,]<-new_S_2_mel
+mark_mat_Mel[5,]<-new_G2_1_mel
+mark_mat_Mel[6,]<-new_G2_2_mel
+
+mark_mat_Mon[1,]<-new_G1_1_mon
+mark_mat_Mon[2,]<-new_G1_2_mon
+mark_mat_Mon[3,]<-new_S_1_mon
+mark_mat_Mon[4,]<-new_S_2_mon
+mark_mat_Mon[5,]<-new_G2_1_mon
+mark_mat_Mon[6,]<-new_G2_2_mon
+
+
+rownames(mark_mat_Mon) <- c('marker1_G1','marker2_G1','marker1_S','marker2_S','marker1_G2','marker2_G2')
+Mon_bulk_heat<- Heatmap(cor(t(mark_mat_Mon),use = 'pairwise.complete.obs'),cluster_rows = F,cluster_columns = F,col=colorRamp2(c(-1, 0, 1), c("blue", "white", "red")))
+  
+rownames(mark_mat_Mel) <- c('marker1_G1','marker2_G1','marker1_S','marker2_S','marker1_G2','marker2_G2')
+Mel_bulk_heat <- Heatmap(cor(t(mark_mat_Mel),use = 'pairwise.complete.obs'),cluster_rows = F,cluster_columns = F,col=colorRamp2(c(-1, 0, 1), c("blue", "white", "red")))
+
+Mon_bulk_heat
+Mel_bulk_heat
+
+
+```
+
+```{r Find New Prots that correlate with CDC markers}
+
+CDC_prot_disco_mon <- matrix(data = NA,nrow = nrow(t7_Monocytes)*3,ncol =  4)
+CDC_prot_disco_mel <- matrix(data = NA,nrow = nrow(t7_Monocytes)*3,ncol =  4)
+colnames(CDC_prot_disco_mon) <- c('prot','Phase','pval','cor')
+colnames(CDC_prot_disco_mel) <- c('prot','Phase','pval','cor')
+count = 0
+for (i in 1:nrow(t7_Monocytes)){
+  count <- count + 1
+  CDC_prot_disco_mon[count,1] <- rownames(t7_Monocytes)[i]
+  CDC_prot_disco_mel[count,1] <- rownames(t7_Monocytes)[i]
+  CDC_prot_disco_mon[count,2] <- 'G1'
+  CDC_prot_disco_mel[count,2] <- 'G1'
+  CDC_prot_disco_mon[count,3] <- cor.test(t(t7_Monocytes[i,]),U_markG1[[1]],method = "spearman",exact=FALSE)$p.value
+  CDC_prot_disco_mel[count,3] <- cor.test(t(t7_Melanomas[i,]),M_markG1[[1]],method = "spearman",exact=FALSE)$p.value
+  CDC_prot_disco_mon[count,4] <- cor(t(t7_Monocytes[i,]),U_markG1[[1]],use = 'pairwise.complete.obs')[1]
+  CDC_prot_disco_mel[count,4] <- cor(t(t7_Melanomas[i,]),M_markG1[[1]],use = 'pairwise.complete.obs')[1]
+  count <- count + 1
+  CDC_prot_disco_mon[count,1] <- rownames(t7_Monocytes)[i]
+  CDC_prot_disco_mel[count,1] <- rownames(t7_Monocytes)[i]
+  CDC_prot_disco_mon[count,2] <- 'S'
+  CDC_prot_disco_mel[count,2] <- 'S'
+  CDC_prot_disco_mon[count,3] <- cor.test(t(t7_Monocytes[i,]),U_markS[[1]],method = "spearman",exact=FALSE)$p.value
+  CDC_prot_disco_mel[count,3] <- cor.test(t(t7_Melanomas[i,]),M_markS[[1]],method = "spearman",exact=FALSE)$p.value
+  CDC_prot_disco_mon[count,4] <- cor(t(t7_Monocytes[i,]),U_markS[[1]],use = 'pairwise.complete.obs')
+  CDC_prot_disco_mel[count,4] <- cor(t(t7_Melanomas[i,]),M_markS[[1]],use = 'pairwise.complete.obs')
+  count <- count + 1
+  CDC_prot_disco_mon[count,1] <- rownames(t7_Monocytes)[i]
+  CDC_prot_disco_mel[count,1] <- rownames(t7_Monocytes)[i]
+  CDC_prot_disco_mon[count,2] <- 'G2'
+  CDC_prot_disco_mel[count,2] <- 'G2'
+  CDC_prot_disco_mon[count,3] <- cor.test(t(t7_Monocytes[i,]),U_markG2[[1]],method = "spearman",exact=FALSE)$p.value
+  CDC_prot_disco_mel[count,3] <- cor.test(t(t7_Melanomas[i,]),M_markG2[[1]],method = "spearman",exact=FALSE)$p.value
+  CDC_prot_disco_mon[count,4] <- cor(t(t7_Monocytes[i,]),U_markG2[[1]],use = 'pairwise.complete.obs')
+  CDC_prot_disco_mel[count,4] <- cor(t(t7_Melanomas[i,]),M_markG2[[1]],use = 'pairwise.complete.obs')
+  
+}
+
+CDC_prot_disco_mon <- as.data.frame(CDC_prot_disco_mon)
+CDC_prot_disco_mel <- as.data.frame(CDC_prot_disco_mel)
+CDC_prot_disco_mon$qval <- p.adjust(CDC_prot_disco_mon$pval,method = 'BH')
+CDC_prot_disco_mel$qval <- p.adjust(CDC_prot_disco_mel$pval,method = 'BH')
+
+CDC_prot_disco_mon <- CDC_prot_disco_mon %>% filter(qval < .01)
+CDC_prot_disco_mel <- CDC_prot_disco_mel %>% filter(qval < .01)
+
+CDC_prot_disco_mon <- CDC_prot_disco_mon %>% filter(cor > 0)
+CDC_prot_disco_mel <- CDC_prot_disco_mel %>% filter(cor > 0)
+
+
+#Mel S, Q07021,Q13561,Q15118,Q9UBE0 G1, Q9H307,Q16778,P06748,Q14978, G2 'O14818
+#mon g2 O43683
+
+intersect(CDC_prot_disco_mel$prot,CDC_prot_disco_mon$prot)
+```
+
+```{r Protein Set Enrichment analysis All}
+
+
+all_prot_M <- filt.mat.cr(as.matrix(t7_Melanomas),.9,.99)
+all_prot_M <- as.data.frame(all_prot_M)
+all_prot_U <- filt.mat.cr(as.matrix(t7_Monocytes),.9,.99)
+all_prot_U <- as.data.frame(all_prot_U)
+all_prot_U <- all_prot_U %>% filter(rownames(all_prot_U)%in% rownames(all_prot_M))
+all_prot_M <- all_prot_M %>% filter(rownames(all_prot_M)%in% rownames(all_prot_U))
+
+
+all_prot_M <- as.data.frame(t(as.matrix(all_prot_M)))
+all_prot_U <-  as.data.frame(t(as.matrix(all_prot_U)))
+
+GO_term_save <- list()
+count2 <- 0
+
+
+#for (k in 1:(length(M_markG1))){
+for (k in 1:10){
+  count2 <- count2 +4
+  
+  Melanoma_CC <- data.frame(matrix(NA, nrow = nrow(all_prot_M), ncol = 3))
+  colnames(Melanoma_CC) <- c('G1','S','G2')
+  Melanoma_CC$G1 <- M_markG1[[count2]]
+  Melanoma_CC$S <- M_markS[[count2]]
+  Melanoma_CC$G2 <- M_markG2[[count2]]
+  
+  
+  
+  Monocyte_CC <- data.frame(matrix(NA, nrow = nrow(all_prot_U), ncol = 3))
+  colnames(Monocyte_CC) <- c('G1','S','G2')
+  Monocyte_CC$G1 <- U_markG1[[count2]]
+  Monocyte_CC$S <- U_markS[[count2]]
+  Monocyte_CC$G2 <- U_markG2[[count2]]
+  
+
+
+  ### 
+  df_cc_cors_M <- data.frame(matrix(NA, nrow = (ncol(all_prot_M)), ncol = 4))
+  colnames(df_cc_cors_M) <- c('prot','G1','S','G2')
+  for (i in 1:(ncol(all_prot_M))){
+    df_cc_cors_M$prot[i] <- colnames(all_prot_M[i])
+    df_cc_cors_M$G1[i] <- cor(Melanoma_CC$G1,all_prot_M[i],use = 'pairwise.complete.obs')
+    df_cc_cors_M$S[i] <- cor(Melanoma_CC$S,all_prot_M[i],use = 'pairwise.complete.obs')
+    df_cc_cors_M$G2[i] <- cor(Melanoma_CC$G2,all_prot_M[i],use = 'pairwise.complete.obs')
+    
+  }
+  df_cc_cors_M[is.na(df_cc_cors_M)==T] = 0 
+  
+  df_cc_cors_U <- data.frame(matrix(NA, nrow = ncol(all_prot_U), ncol = 4))
+  colnames(df_cc_cors_U) <- c('prot','G1','S','G2')
+  for (i in 1:ncol(all_prot_U)){
+    df_cc_cors_U$prot[i] <- colnames(all_prot_U[i])
+    df_cc_cors_U$G1[i] <- cor(Monocyte_CC$G1,all_prot_U[i],use = 'pairwise.complete.obs')
+    df_cc_cors_U$S[i] <- cor(Monocyte_CC$S,all_prot_U[i],use = 'pairwise.complete.obs')
+    df_cc_cors_U$G2[i] <- cor(Monocyte_CC$G2,all_prot_U[i],use = 'pairwise.complete.obs')
+  }
+  
+  df_cc_cors_U[is.na(df_cc_cors_U)==T] = 0 
+  
+  infoM <- data.frame(matrix(NA, nrow = 3000, ncol = 4 ))
+  infoU <- data.frame(matrix(NA, nrow = 3000, ncol = 4 ))
+  colnames(infoM) <- c('G1_M','S_M','G2_M','FDR')
+  colnames(infoU) <- c('G1_U','S_U','G2_U','FDR')
+  
+  count = 0
+  df <- cbind(df_cc_cors_M,df_cc_cors_U)
+  df$prot <- NULL
+  colnames(df) <- c('G1M','SM','G2M','prot','G1U','SU','G2U')
+  test <- 0
+  unique_GO_terms <- unique(GO_db$GO_term_name)
+  
+  
+  for (i in 1:length(unique_GO_terms)){
+    GO_db_lim <- GO_db %>% dplyr::filter(GO_term_name == unique_GO_terms[i])
+    df_temp <- df %>% dplyr::filter(prot %in% GO_db_lim$Uniprot)
+    if (nrow(df_temp) > 2){
+      if (nrow(df_temp) < 100){
+        df_temp$prot <- NULL
+        df_temp.m <- reshape2::melt(df_temp,id.vars = NULL)
+        a <-aov(value~variable,data = df_temp.m)
+
+        count = count+1
+        
+        df_M <- df_cc_cors_M %>% filter(prot %in% GO_db_lim$Uniprot)
+        df_M$prot <- NULL
+        df_U <- df_cc_cors_U %>% filter(prot %in% GO_db_lim$Uniprot)
+        df_U$prot <- NULL
+        
+        infoM[count,1:3]<- colMedians(as.matrix(df_M),na.rm = T)
+        infoM[count,4] <- summary(a)[[1]][["Pr(>F)"]][1]
+        
+        infoU[count,1:3]<- colMedians(as.matrix(df_U),na.rm = T)
+        infoU[count,4] <- summary(a)[[1]][["Pr(>F)"]][1]
+        
+        rownames(infoM)[count] <- unique_GO_terms[i]
+        rownames(infoU)[count] <- unique_GO_terms[i]
+        
+        
+      }
+    }
+  }
+  
+  
+  print('here')
+  infoM <- infoM %>% filter(is.na(FDR)==F)
+  infoM$fdrnew <- p.adjust(infoM$FDR,method = 'BH')
+  infoU <- infoU %>% filter(is.na(FDR)==F)
+  infoU$fdrnew <- p.adjust(infoU$FDR,method = 'BH')
+  
+  infoU <- infoU %>% filter(fdrnew < .1)
+  infoM <- infoM %>% filter(fdrnew < .1)
+  
+  
+  GO_term_save[[k]] <- rownames(infoU)
+  
+
+}
+
+
+all_go <- c()
+for(i in 1:length(GO_term_save)){
+  all_go <- c(all_go,GO_term_save[[i]])
+}
+
+all_go <- unique(all_go)
+
+all_go_count <- matrix(data = NA,nrow = length(all_go),ncol = 2)
+all_go_count[,1] <- all_go
+all_go_count[,2] <- 0
+all_go_count <- as.data.frame(all_go_count)
+
+
+count <- 0
+
+for(i in 1:length(GO_term_save)){
+  count <- count + 1
+  all_go_count$V2[all_go_count$V1 %in% GO_term_save[[i]]] <- count
+}
+
+all_go_count$V2 <- as.numeric(all_go_count$V2)
+all_go_count <- all_go_count %>% filter(V2 > 0)
+
+
+Go_names_lim <- GO_db %>% dplyr::filter(GO_term_name %in% all_go_count$V1)
+unique_GO_terms <- unique(Go_names_lim$GO_term_name)
+
+for (k in 1:length(M_markG1)){
+    
+  
+  Melanoma_CC <- data.frame(matrix(NA, nrow = nrow(all_prot_M), ncol = 3))
+  colnames(Melanoma_CC) <- c('G1','S','G2')
+  Melanoma_CC$G1 <- M_markG1[[k]]
+  Melanoma_CC$S <- M_markS[[k]]
+  Melanoma_CC$G2 <- M_markG2[[k]]
+  
+  
+  
+  Monocyte_CC <- data.frame(matrix(NA, nrow = nrow(all_prot_U), ncol = 3))
+  colnames(Monocyte_CC) <- c('G1','S','G2')
+  Monocyte_CC$G1 <- U_markG1[[k]]
+  Monocyte_CC$S <- U_markS[[k]]
+  Monocyte_CC$G2 <- U_markG2[[k]]
+  
+
+
+  ### 
+  df_cc_cors_M <- data.frame(matrix(NA, nrow = (ncol(all_prot_M)), ncol = 4))
+  colnames(df_cc_cors_M) <- c('prot','G1','S','G2')
+  for (i in 1:(ncol(all_prot_M))){
+    df_cc_cors_M$prot[i] <- colnames(all_prot_M[i])
+    df_cc_cors_M$G1[i] <- cor(Melanoma_CC$G1,all_prot_M[i],use = 'pairwise.complete.obs')
+    df_cc_cors_M$S[i] <- cor(Melanoma_CC$S,all_prot_M[i],use = 'pairwise.complete.obs')
+    df_cc_cors_M$G2[i] <- cor(Melanoma_CC$G2,all_prot_M[i],use = 'pairwise.complete.obs')
+    
+  }
+  df_cc_cors_M[is.na(df_cc_cors_M)==T] = 0 
+  
+  df_cc_cors_U <- data.frame(matrix(NA, nrow = ncol(all_prot_U), ncol = 4))
+  colnames(df_cc_cors_U) <- c('prot','G1','S','G2')
+  for (i in 1:ncol(all_prot_U)){
+    df_cc_cors_U$prot[i] <- colnames(all_prot_U[i])
+    df_cc_cors_U$G1[i] <- cor(Monocyte_CC$G1,all_prot_U[i],use = 'pairwise.complete.obs')
+    df_cc_cors_U$S[i] <- cor(Monocyte_CC$S,all_prot_U[i],use = 'pairwise.complete.obs')
+    df_cc_cors_U$G2[i] <- cor(Monocyte_CC$G2,all_prot_U[i],use = 'pairwise.complete.obs')
+  }
+  
+  df_cc_cors_U[is.na(df_cc_cors_U)==T] = 0 
+  
+  infoM <- data.frame(matrix(NA, nrow = 3000, ncol = 4 ))
+  infoU <- data.frame(matrix(NA, nrow = 3000, ncol = 4 ))
+  colnames(infoM) <- c('G1_M','S_M','G2_M','FDR')
+  colnames(infoU) <- c('G1_U','S_U','G2_U','FDR')
+
+  count = 0
+  df <- cbind(df_cc_cors_M,df_cc_cors_U)
+  df$prot <- NULL
+  colnames(df) <- c('G1M','SM','G2M','prot','G1U','SU','G2U')
+  test <- 0
+  
+  for (i in 1:length(unique_GO_terms)){
+    GO_db_lim <- GO_db %>% dplyr::filter(GO_term_name == unique_GO_terms[i])
+    df_temp <- df %>% dplyr::filter(prot %in% GO_db_lim$Uniprot)
+    
+    if (nrow(df_temp) > 2){
+      if (nrow(df_temp) < 100){
+      
+        df_temp$prot <- NULL
+        df_temp.m <- reshape2::melt(df_temp,id.vars = NULL)
+        a <-aov(value~variable,data = df_temp.m)
+
+        count = count+1
+        
+        df_M <- df_cc_cors_M %>% dplyr::filter(prot %in% GO_db_lim$Uniprot)
+        df_M$prot <- NULL
+        df_U <- df_cc_cors_U %>% dplyr::filter(prot %in% GO_db_lim$Uniprot)
+        df_U$prot <- NULL
+        
+        infoM[count,1:3]<- colMedians(as.matrix(df_M),na.rm = T)
+        infoM[count,4] <- summary(a)[[1]][["Pr(>F)"]][1]
+        
+        infoU[count,1:3]<- colMedians(as.matrix(df_U),na.rm = T)
+        infoU[count,4] <- summary(a)[[1]][["Pr(>F)"]][1]
+        
+        rownames(infoM)[count] <- unique_GO_terms[i]
+        rownames(infoU)[count] <- unique_GO_terms[i]
+        
+        
+      }
+    }
+  
+  }
+  
+  
+  print('here')
+  
+  infoM <- infoM %>% dplyr::filter(is.na(FDR)==F)
+  infoU <- infoU %>% dplyr::filter(is.na(FDR)==F)
+
+  if(k==1){
+    infoU_save <- infoU
+    infoM_save <- infoM
+  }
+  else{
+    for(j in 1:nrow(infoU_save)){
+      if(infoU_save[j,4] > infoU[j,4]){
+         infoU_save[j,1:3] <- infoU[j,1:3]
+         infoU_save[j,4] <- infoU[j,4]
+      }
+      if(infoM_save[j,4] > infoM[j,4]){
+        infoM_save[j,1:3] <- infoM[j,1:3]
+        infoM_save[j,4] <- infoM[j,4]
+        
+      }
+    }
+  }
+}
+```
+
+```{r Plotting for PSEA}
+## plot
+
+#infoM_save <- infoM_save %>% dplyr::filter(FDR < .05)
+#infoU_save <- infoU_save %>% dplyr::filter(FDR < .05)
+infoM_save$FDR <- NULL
+infoM_save$blank <- 0
+infoU_save$FDR <- NULL
+PSEA_full <- cbind(infoM_save,infoU_save)
+
+#write.csv(PSEA_full,'/Users/andrewleduc/Desktop/nPOP_Paper/dat/Output_tables/CDC_SC_GSEA.csv')
+
+
+PSEA_full <- PSEA_full[order(rownames(PSEA_full)),]
+col_fun = colorRamp2(c(-.2, 0, .2), c("blue", "white", "red"),space = 'RGB',transparency = 0)
+
+#Computing how similar or different a go term is between cell types
+PSEA_full$diff <- (abs(PSEA_full$G1_M-PSEA_full$G1_U) +
+                abs(PSEA_full$S_M-PSEA_full$S_U)+abs(PSEA_full$G2_M-PSEA_full$G2_U))/(abs(PSEA_full$G1_M)+
+                                                                   abs(PSEA_full$G1_U) +
+                                               abs(PSEA_full$S_M)+abs(PSEA_full$S_U)+
+                                              abs(PSEA_full$G2_M)+abs(PSEA_full$G2_U))
+
+
+PSEA_full <- PSEA_full[order(PSEA_full$diff),]
+PSEA_full <- as.data.frame(PSEA_full)
+# Plotting most similar GO terms between cell types
+top20 <- PSEA_full[1:40,]#[c(1,2,3,6,7,8,11,16,18,20,21,24,27,29,28,31,30,37,34,33,41,42,60,54,53,51),]
+top20$diff <- NULL
+top20<- as.matrix(top20)
+
+Heatmap(top20,cluster_columns = F,cluster_rows = T,show_heatmap_legend = FALSE,row_names_gp = grid::gpar(fontsize = 8),
+        col = col_fun,show_row_dend = FALSE )
+
+
+# Plotting for most differential GO terms
+rownames(bot20)
+bot20 <- PSEA_full[(nrow(PSEA_full)-20):nrow(PSEA_full),]#[c((nrow(PSEA_full)-20):(nrow(PSEA_full)),157,139),]
+bot20$diff <- NULL
+bot20<- as.matrix(bot20)
+bot20 <- bot20[-c(5,18),]
+
+Heatmap(bot20,cluster_columns = F,cluster_rows = T,show_heatmap_legend = FALSE,row_names_gp = grid::gpar(fontsize = 8),
+        col = col_fun,show_row_dend = FALSE )
+
+## Formating/currating heatmaps
+top20[top20 > .2] <- .2
+top20[top20 < -.2] <- -.2
+bot20[bot20 > .2] <- .2
+bot20[bot20 < -.2] <- -.2
+rownames(top20)[11] <- 'regulation of amino acid metabolic process'
+t20 <- Heatmap(top20,cluster_columns = F,cluster_rows = T,show_heatmap_legend = T,row_names_gp = grid::gpar(fontsize = 8),
+        show_row_dend = FALSE )
+b20 <- Heatmap(bot20,cluster_columns = F,cluster_rows = T,show_heatmap_legend = T,row_names_gp = grid::gpar(fontsize = 8),
+               show_row_dend = FALSE )
+
+top20_2 <- top20[row_order(t20),]
+bot20_2 <- bot20[row_order(b20),]
+
+#write(rownames(top20_2),'/Users/andrewleduc/Desktop/t20.txt')
+#write(rownames(bot20_2),'/Users/andrewleduc/Desktop/b20.txt')
+
+
+## Plotting Box Plots
+unique_GO_terms <- c("MHC class II protein complex binding","protein polyubiquitination")
+
+# Rerunning PSEA loop to grab distributions of correlations for go terms in box plots
+for (k in 1:length(M_markG1)){
+    
+  
+  Melanoma_CC <- data.frame(matrix(NA, nrow = nrow(all_prot_M), ncol = 3))
+  colnames(Hela_CC) <- c('G1','S','G2')
+  Melanoma_CC$G1 <- M_markG1[[k]]
+  Melanoma_CC$S <- M_markS[[k]]
+  Melanoma_CC$G2 <- M_markG2[[k]]
+  
+  
+  
+  Monocyte_CC <- data.frame(matrix(NA, nrow = nrow(all_prot_U), ncol = 3))
+  colnames(Monocyte_CC) <- c('G1','S','G2')
+  Monocyte_CC$G1 <- U_markG1[[k]]
+  Monocyte_CC$S <- U_markS[[k]]
+  Monocyte_CC$G2 <- U_markG2[[k]]
+  
+
+
+  ### 
+  df_cc_cors_M <- data.frame(matrix(NA, nrow = (ncol(all_prot_M)), ncol = 4))
+  colnames(df_cc_cors_M) <- c('prot','G1','S','G2')
+  for (i in 1:(ncol(all_prot_M))){
+    df_cc_cors_M$prot[i] <- colnames(all_prot_M[i])
+    df_cc_cors_M$G1[i] <- cor(Melanoma_CC$G1,all_prot_M[i],use = 'pairwise.complete.obs')
+    df_cc_cors_M$S[i] <- cor(Melanoma_CC$S,all_prot_M[i],use = 'pairwise.complete.obs')
+    df_cc_cors_M$G2[i] <- cor(Melanoma_CC$G2,all_prot_M[i],use = 'pairwise.complete.obs')
+    
+  }
+  df_cc_cors_M[is.na(df_cc_cors_M)==T] = 0 
+  
+  df_cc_cors_U <- data.frame(matrix(NA, nrow = ncol(all_prot_U), ncol = 4))
+  colnames(df_cc_cors_U) <- c('prot','G1','S','G2')
+  for (i in 1:ncol(all_prot_U)){
+    df_cc_cors_U$prot[i] <- colnames(all_prot_U[i])
+    df_cc_cors_U$G1[i] <- cor(Monocyte_CC$G1,all_prot_U[i],use = 'pairwise.complete.obs')
+    df_cc_cors_U$S[i] <- cor(Monocyte_CC$S,all_prot_U[i],use = 'pairwise.complete.obs')
+    df_cc_cors_U$G2[i] <- cor(Monocyte_CC$G2,all_prot_U[i],use = 'pairwise.complete.obs')
+  }
+  
+  df_cc_cors_U[is.na(df_cc_cors_U)==T] = 0 
+  
+  infoM <- data.frame(matrix(NA, nrow = 3000, ncol = 4 ))
+  infoU <- data.frame(matrix(NA, nrow = 3000, ncol = 4 ))
+  colnames(infoM) <- c('G1_M','S_M','G2_M','FDR')
+  colnames(infoU) <- c('G1_U','S_U','G2_U','FDR')
+
+  count = 0
+  df <- cbind(df_cc_cors_M,df_cc_cors_U)
+  df$prot <- NULL
+  colnames(df) <- c('G1M','SM','G2M','prot','G1U','SU','G2U')
+  test <- 0
+  
+  for (i in 1:2){
+    GO_db_lim <- GO_db %>% dplyr::filter(GO_term_name == unique_GO_terms[i])
+    df_temp <- df %>% dplyr::filter(prot %in% GO_db_lim$Uniprot)
+    if (nrow(df_temp) > 2){
+      if (nrow(df_temp) < 100){
+      
+        df_temp$prot <- NULL
+        df_temp.m <- reshape2::melt(df_temp,id.vars = NULL)
+        a <-aov(value~variable,data = df_temp.m)
+
+        count = count+1
+        
+        df_M <- df_cc_cors_M %>% filter(prot %in% GO_db_lim$Uniprot)
+        df_M$prot <- NULL
+        df_U <- df_cc_cors_U %>% filter(prot %in% GO_db_lim$Uniprot)
+        df_U$prot <- NULL
+        
+        infoM[count,1:3]<- colMedians(as.matrix(df_M),na.rm = T)
+        infoM[count,4] <- summary(a)[[1]][["Pr(>F)"]][1]
+        
+        infoU[count,1:3]<- colMedians(as.matrix(df_U),na.rm = T)
+        infoU[count,4] <- summary(a)[[1]][["Pr(>F)"]][1]
+        
+        rownames(infoM)[count] <- unique_GO_terms[i]
+        rownames(infoU)[count] <- unique_GO_terms[i]
+            if(i == 1){
+              df_sim_M <- df_M
+              df_sim_U <- df_U 
+            }
+            else{
+              df_diff_M <- df_M
+              df_diff_U <- df_U
+            }
+      }
+    }
+  
+  }
+  
+  
+  print('here')
+  
+  infoM <- infoM %>% filter(is.na(FDR)==F)
+  infoU <- infoU %>% filter(is.na(FDR)==F)
+
+  if(k==1){
+    infoU_save <-infoU
+    infoM_save <-infoM
+   
+    df_diff_M.s <- df_diff_M
+    df_diff_U.s <- df_diff_U
+    df_sim_M.s <- df_sim_M
+    df_sim_U.s <- df_sim_U   
+    
+  }
+  else{
+    for(j in 1:nrow(infoU_save)){
+      if(infoU_save[j,4] > infoU[j,4]){
+         infoU_save[j,4] <- infoU[j,4]
+         if(j==1){
+            df_sim_M.s <- df_sim_M
+            df_sim_U.s <- df_sim_U 
+         }
+         else{
+           df_diff_M.s <- df_diff_M
+           df_diff_U.s <- df_diff_U
+         }
+
+      }
+    }
+  }
+}
+
+
+df_diff_M.m <- reshape2::melt(df_diff_M.s)
+df_sim_M.m <- reshape2::melt(df_sim_M.s)
+df_diff_U.m <- reshape2::melt(df_diff_U.s)
+df_sim_U.m <- reshape2::melt(df_sim_U.s)
+
+
+s1 <- ggplot(df_sim_U.m,aes(x = variable, y = value, color =variable )) +geom_boxplot(lwd=1.5,)+scale_color_manual(values=c("#FC7E00","#794119", "#E167BF"))+
+  theme_bw()+ggtitle('chromatin silencing at rDNA') +
+  ylab('') + xlab('')+ coord_cartesian(ylim = c(-.2,.2))+
+  theme(panel.border = element_rect(fill=NA, colour = "black", size=2))+
+  theme(axis.text.y = element_text(size = 40,color = 'black'), axis.title=element_text(size=30))+
+  rremove('legend')
+
+s2 <- ggplot(df_sim_M.m,aes(x = variable, y = value, color =variable )) +geom_boxplot(lwd=1.5,)+scale_color_manual(values=c("#FC7E00","#794119", "#E167BF"))+
+  theme_bw()+ggtitle('chromatin silencing at rDNA') +
+  ylab('') + xlab('')+ coord_cartesian(ylim = c(-.2,.2))+
+  theme(panel.border = element_rect(fill=NA, colour = "black", size=2))+
+  theme(axis.text.y = element_text(size = 40,color = 'black'), axis.title=element_text(size=30))+
+  rremove('legend')
+ s3 <-ggplot(df_diff_M.m,aes(x = variable, y = value, color =variable )) +geom_boxplot(lwd=1.5,)+scale_color_manual(values=c("#FC7E00","#794119", "#E167BF"))+
+  theme_bw()+ggtitle('p53 mediated cell cycle arrest') +
+  ylab('') + xlab('')+ coord_cartesian(ylim = c(-.15,.15))+
+  theme(panel.border = element_rect(fill=NA, colour = "black", size=2))+
+  theme(axis.text.y = element_text(size = 40,color = 'black'), axis.title=element_text(size=30))+
+  rremove('legend')
+
+s4 <-ggplot(df_diff_U.m,aes(x = variable, y = value, color =variable )) +geom_boxplot(lwd=1.5,)+scale_color_manual(values=c("#FC7E00","#794119", "#E167BF"))+
+  theme_bw()+ggtitle('p53 mediated cell cycle arrest') +
+  ylab('') + xlab('')+ coord_cartesian(ylim = c(-.15,.15))+
+  theme(panel.border = element_rect(fill=NA, colour = "black", size=2))+
+  theme(axis.text.y = element_text(size = 40,color = 'black'), axis.title=element_text(size=30))+
+  rremove('legend')
+
+ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/figs/CDC/Box_diff_mel.png',plot = s1,height = unit(3.8, "cm"),width = unit(5, "cm"))
+ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/figs/CDC/Box_sim_mel.png',plot = s2,height = unit(3.8, "cm"),width = unit(5, "cm"))
+ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/figs/CDC/Box_diff_mon.png',plot = s3,height = unit(3.8, "cm"),width = unit(5, "cm"))
+ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/figs/CDC/Box_sim_mon.png',plot = s4,height = unit(3.8, "cm"),width = unit(5, "cm"))
+
+s1+s2
+s3+s4
+
+```
+
+```{r PCA on CDC Proteins}
+
+Mark_all <- c(S_mark1,S_mark2,G2_mark1,G2_mark2,G1_mark1,G1_mark2)
+
+Hela_CC <- t7_Melanomas %>% dplyr::filter(rownames(t7_Melanomas) %in% Mark_all)
+Monocyte_CC <- t7_Monocytes %>% dplyr::filter(rownames(t7_Monocytes) %in% Mark_all)
+
+#Filter out any cells that had 0 observations for specified CC markers 
+#and Normalize to reletive protein levels within a cell type
+H_na <- colMeans(Hela_CC,na.rm = T)
+Hela_CC <- Hela_CC[,(is.na(H_na)==F)]
+Mon_na <- colMeans(Monocyte_CC,na.rm = T)
+Monocyte_CC <- Monocyte_CC[,(is.na(Mon_na)==F)]
+
+Hela_CC <- filt.mat.cr(cr_norm_log(as.matrix(Hela_CC)),.9,.9)
+Monocyte_CC <- filt.mat.cr(cr_norm_log(as.matrix(Monocyte_CC)),.9,.9)
+
+
+Hela_CC <- as.data.frame(Hela_CC)
+Monocyte_CC <- as.data.frame(Monocyte_CC)
+Hela_CC <- Hela_CC %>% dplyr::filter(rownames(Hela_CC) %in% rownames(Monocyte_CC))
+
+test <- cbind(Hela_CC,Monocyte_CC)
+
+# Protein Protein Correlations
+# H_prot_cor <- as.data.frame(Hela_CC) 
+# U_prot_cor <- as.data.frame(Monocyte_CC) 
+# 
+# H_prot_cor <- cor(t(H_prot_cor),use = 'pairwise.complete.obs')
+# U_prot_cor <- cor(t(U_prot_cor),use = 'pairwise.complete.obs')
+# 
+# #Impute correlation matrices in cases where there 
+# #where no pairwise observations between two proteins
+# H_prot_cor <- hknn(as.matrix(H_prot_cor),2)
+# U_prot_cor <- hknn(as.matrix(U_prot_cor),2)
+# 
+# #Compute common PCs from summed correlation matrices for the two cell types
+# CPC_corr <- H_prot_cor+U_prot_cor
+# CPC<-eigen(CPC_corr)
+# CPC_v<-as.data.frame(CPC$vectors)
+# 
+# 
+# #Multiply Hel=La and Monocyte Protein X Cell matrices by common PCs to form joint space
+# Hela_CC[is.na(Hela_CC)] = 0
+# Monocyte_CC[is.na(Monocyte_CC)] = 0
+# 
+# H_cor_PC1 <-as.matrix(t(CPC_v[1]))%*%as.matrix(Hela_CC)
+# H_cor_PC2 <-as.matrix(t(CPC_v[2]))%*%as.matrix(Hela_CC)
+# 
+# U_cor_PC1 <-as.matrix(t(CPC_v[1]))%*%as.matrix(Monocyte_CC)
+# U_cor_PC2 <-as.matrix(t(CPC_v[2]))%*%as.matrix(Monocyte_CC)
+# 
+# PC1 <- c(H_cor_PC1,U_cor_PC1)
+# PC2 <- c(H_cor_PC2,U_cor_PC2)
+
+X.m <- test
+pca.imp.cor <- cor(X.m, use = 'pairwise.complete.obs',method = c('pearson'))
+pca.imp.cor[is.na(pca.imp.cor)==T] <- 0
+
+# PCA
+sc.pca<-eigen(pca.imp.cor)
+scx<-as.data.frame(sc.pca$vectors)
+colnames(scx)<-paste0("PC",1:ncol(scx))
+scx$cells<-colnames(pca.imp.cor)
+
+#scx$cells %in% colnames(t7_Melanomas)
+
+#Common PC data frame of first two PCs for plotting
+#CPC_f <- data.frame(matrix(NA, nrow = length(PC1), ncol = 3 ))
+CPC_f <- data.frame(matrix(NA, nrow = nrow(scx), ncol = 3 ))
+#CPC_f$X1 <- as.numeric(PC1)
+CPC_f$X1 <- scx$PC1
+#CPC_f$X2 <- as.numeric(PC2)
+CPC_f$X2 <- scx$PC2
+#Cell Assignment
+#CPC_f$X3[1:ncol(H_cor_PC1)] = 'HeLa'
+CPC_f$X3[1:765] = 'HeLa'
+#CPC_f$X3[(ncol(H_cor_PC1)+1):length(PC1)] = 'U-937'
+CPC_f$X3[766:nrow(CPC_f)] = 'U-937'
+
+#Form vectors of average protein abundance from different phases to color code PCA based off CC markers
+S <- c(S_mark1,S_mark2)
+G1 <- c(G1_mark1,G1_mark2)
+G2 <- c(G2_mark1,G2_mark2)
+
+
+#Sum only observed values
+Hela_CC[Hela_CC==0] <- NA
+Hela_CC <- as.data.frame(Hela_CC)
+Monocyte_CC[Monocyte_CC==0] <- NA
+Monocyte_CC <- as.data.frame(Monocyte_CC)
+
+#HeLa average protein abundance vectors
+SH <-  Hela_CC %>% dplyr::filter(rownames(Hela_CC) %in% S)
+SH <- as.matrix(SH)
+G1H <- Hela_CC %>% dplyr::filter(rownames(Hela_CC) %in% G1)
+G1H <- as.matrix(G1H)
+G2H <- Hela_CC %>% dplyr::filter(rownames(Hela_CC) %in% G2)
+G2H <- as.matrix(G2H)
+
+#Monocyte average protein abundance vectors
+G1U <- Monocyte_CC %>% dplyr::filter(rownames(Monocyte_CC) %in% G1)
+G1U <- as.matrix(G1U)
+G2U <- Monocyte_CC %>% dplyr::filter(rownames(Monocyte_CC) %in% G2)
+G2U <- as.matrix(G2U)
+
+SU <- Monocyte_CC %>% dplyr::filter(rownames(Monocyte_CC) %in% S)
+SU <- as.matrix(SU)
+
+#Add vectors for color coding by average abundance of CC markers
+#to PCA plotting matrix
+
+CPC_f$G1 <- NA
+CPC_f$S <- NA
+CPC_f$G2 <- NA
+CPC_f$Id <- NA
+
+CPC_f$G1[1:ncol(G1H)] <- colMeans(G1H,na.rm = T)
+CPC_f$G1[(ncol(G1H)+1):nrow(CPC_f)] <-  colMeans(G1U,na.rm = T)
+
+CPC_f$Id[1:ncol(G1H)] <- colnames(G1H)
+CPC_f$Id[(ncol(G1H)+1):nrow(CPC_f)] <-  colnames(G1U)
+
+CPC_f$S[1:ncol(SH)] <-colMeans(SH,na.rm = T)
+CPC_f$S[(ncol(SH)+1):nrow(CPC_f)] <-colMeans(SU,na.rm = T)
+
+CPC_f$G2[1:ncol(G2H)] <-colMeans(G2H,na.rm = T)
+CPC_f$G2[(ncol(G2H)+1):nrow(CPC_f)] <-colMeans(G2U,na.rm = T)
+
+
+
+#adjust scale for plotting
+CPC_f$G1[is.na(CPC_f$G1)==T] = 0
+CPC_f$S[is.na(CPC_f$S)==T] = 0
+CPC_f$G2[is.nan(CPC_f$G2)==T] = 0
+
+# CPC_f$G1[CPC_f$G1 > 1] = 1
+# CPC_f$S[CPC_f$S > 1] = 1
+# CPC_f$G2[CPC_f$G2 > 1] = 1
+# 
+# CPC_f$G1[CPC_f$G1 < -1] = -1
+# CPC_f$S[CPC_f$S < -1] = -1
+# CPC_f$G2[CPC_f$G2 < -1] = -1
+
+
+
+CPC_f$G1_p <- NA
+CPC_f$S_p <- NA
+CPC_f$G2_p <- NA
+for(i in 1:nrow(CPC_f)){
+  CPC_f$G1_p[i] <- 2^CPC_f$G1[i]/(2^CPC_f$G1[i]+2^CPC_f$S[i]+2^CPC_f$G2[i])
+  CPC_f$S_p[i] <- 2^CPC_f$S[i]/(2^CPC_f$G1[i]+2^CPC_f$S[i]+2^CPC_f$G2[i])
+  CPC_f$G2_p[i] <- 2^CPC_f$G2[i]/(2^CPC_f$G1[i]+2^CPC_f$S[i]+2^CPC_f$G2[i])
+}
+
+
+
+#plot PCA
+
+
+G1_pca_plot <- ggscatter(CPC_f,color = 'G1' ,x ='X1', y = 'X2',shape='X3', size = 5, alpha=0.5) +
+  xlab("PC1") +
+  ylab("PC2") +
+  font("ylab",size=30) +
+  font("xlab",size=30) +
+  font("xy.text", size=26)+
+  rremove("legend")
+  
+G1_pca_plot <- G1_pca_plot + scale_color_gradient2(midpoint = 0, low = "blue", mid = "white",
+                          high = "red",name = '') #+theme(plot.margin = margin(10, 10, 10, 10),axis.line.x.bottom=element_line(size=1),
+        #axis.line.y.left  =element_line(size=1))
+
+S_pca_plot <- ggscatter(CPC_f,color = 'S' ,x ='X1', y = 'X2',shape='X3', size = 5, alpha=0.5) +
+  xlab("PC1") +
+  ylab("PC2") +
+  font("ylab",size=30) +
+  font("xlab",size=30) +
+  font("xy.text", size=26)+
+  rremove("legend")
+  #font("xy.text", size=20)+annotate("text", x=0.062-0.03, y=-1.5, label=paste0(dim(CPC_f)[1], " cells"), size=8)
+S_pca_plot <- S_pca_plot + scale_color_gradient2(midpoint = 0, low = "blue", mid = "white",
+                          high = "red",name = '') #+theme(plot.margin = margin(10, 10, 10, 10),axis.line.x.bottom=element_line(size=1),
+        #axis.line.y.left  =element_line(size=1))
+G2_pca_plot <- ggscatter(CPC_f,color = 'G2' ,x ='X1', y = 'X2',shape='X3', size = 5, alpha=0.5) +
+  xlab("PC1") +
+  ylab("PC2") +
+  font("ylab",size=30) +
+  font("xlab",size=30) +
+  font("xy.text", size=26)+ 
+  rremove("legend")
+
+G2_pca_plot <- G2_pca_plot + scale_color_gradient2(midpoint = 0, low = "blue", mid = "white",
+                          high = "red",name = '') #+
+  #theme(plot.margin = margin(10, 10, 10, 10),axis.line.x.bottom=element_line(size=1),
+       # axis.line.y.left  =element_line(size=1))
+
+G1_pca_plot
+S_pca_plot
+G2_pca_plot
+
+
+#ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/figs/CDC/G1.png',plot = G1_pca_plot,width = unit(6, "cm"),height =  unit(5, "cm"))
+#ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/figs/CDC/S.png',plot = S_pca_plot,width = unit(6, "cm"),height =  unit(5, "cm"))
+#ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/figs/CDC/G2.png',plot = G2_pca_plot,width = unit(6, "cm"),height =  unit(5, "cm"))
+
+
+```
+
+```{r Melanoma Sub Population Marker Analysis}
+
+neg_mat <- matrix(1,nrow = 6,ncol = 6)
+neg_mat[3:6,1] <- -1
+neg_mat[4:6,2] <- -1
+neg_mat[5:6,3] <- -1
+neg_mat[6,4] <- -1
+
+Large_Cor_hold <- c()
+
+Mat_LC <- matrix(data = NA, nrow = 15,ncol = 5000)
+#Mat_var <- matrix(data = NA, nrow = 15,ncol = 5000)
+Small_Cor_hold <- c()
+
+for(j in 1:500){
+  
+  sub1 <- sample(ncol(t7_Melanomas_Small),62)
+  #sub2 <- sample(ncol(t7_Melanomas_Large),ncol(t7_Melanomas_Small)/2)
+  
+  #t7_Melanomas_Small_samp <- t7_Melanomas_Small[,sub1]
+  t7_Melanomas_Large_samp <- t7_Melanomas_Small[,sub1]
+  #Melanoma Small Marker vectors
+  
+  # G1_1_Mel_Sm <- t7_Melanomas_Small_samp %>% filter(rownames(t7_Melanomas_Small_samp) %in% G1_mark1)
+  # G1_2_Mel_Sm <-t7_Melanomas_Small_samp %>% filter(rownames(t7_Melanomas_Small_samp) %in% G1_mark2)
+  # 
+  # S_1_Mel_Sm <-t7_Melanomas_Small_samp %>% filter(rownames(t7_Melanomas_Small_samp) %in% S_mark1)
+  # S_2_Mel_Sm <-t7_Melanomas_Small_samp %>% filter(rownames(t7_Melanomas_Small_samp) %in% S_mark2)
+  # 
+  # G2_1_Mel_Sm <-t7_Melanomas_Small_samp %>% filter(rownames(t7_Melanomas_Small_samp) %in% G2_mark1)
+  # G2_2_Mel_Sm <-t7_Melanomas_Small_samp %>% filter(rownames(t7_Melanomas_Small_samp) %in% G2_mark2)
+  # 
+  # G1_1_Mel_Sm <- colMeans(G1_1_Mel_Sm,na.rm = T)
+  # G1_2_Mel_Sm <- colMeans(G1_2_Mel_Sm,na.rm = T)
+  # 
+  # S_1_Mel_Sm <- colMeans(S_1_Mel_Sm,na.rm = T)
+  # S_2_Mel_Sm <- colMeans(S_2_Mel_Sm,na.rm = T)
+  # 
+  # G2_1_Mel_Sm <- colMeans(G2_1_Mel_Sm,na.rm = T)
+  # G2_2_Mel_Sm <- colMeans(G2_2_Mel_Sm,na.rm = T)
+  
+  #Melanoma Large Marker vectors
+  G1_1_Mel_L <- t7_Melanomas_Large_samp %>% filter(rownames(t7_Melanomas_Large_samp) %in% G1_mark1)
+  G1_2_Mel_L <-t7_Melanomas_Large_samp %>% filter(rownames(t7_Melanomas_Large_samp) %in% G1_mark2)
+  
+  S_1_Mel_L <-t7_Melanomas_Large_samp %>% filter(rownames(t7_Melanomas_Large_samp) %in% S_mark1)
+  S_2_Mel_L <-t7_Melanomas_Large_samp %>% filter(rownames(t7_Melanomas_Large_samp) %in% S_mark2)
+  
+  G2_1_Mel_L <-t7_Melanomas_Large_samp %>% filter(rownames(t7_Melanomas_Large_samp) %in% G2_mark1)
+  G2_2_Mel_L <-t7_Melanomas_Large_samp %>% filter(rownames(t7_Melanomas_Large_samp) %in% G2_mark2)
+  
+  G1_1_Mel_L <- colMeans(G1_1_Mel_L,na.rm = T)
+  G1_2_Mel_L <- colMeans(G1_2_Mel_L,na.rm = T)
+  
+  S_1_Mel_L <- colMeans(S_1_Mel_L,na.rm = T)
+  S_2_Mel_L <- colMeans(S_2_Mel_L,na.rm = T)
+  
+  G2_1_Mel_L <- colMeans(G2_1_Mel_L,na.rm = T)
+  G2_2_Mel_L <- colMeans(G2_2_Mel_L,na.rm = T)
+  
+  mark_mat_Mel_Large <- matrix(data = NA,nrow = 6,ncol = ncol(t7_Melanomas_Large_samp))
+  #mark_mat_Mel_Small <- matrix(data = NA,nrow = 6,ncol = ncol(t7_Melanomas_Small_samp))
+  
+  mark_mat_Mel_Large[1,]<-G1_1_Mel_L
+  mark_mat_Mel_Large[2,]<-G1_2_Mel_L
+  mark_mat_Mel_Large[3,]<-S_1_Mel_L
+  mark_mat_Mel_Large[4,]<-S_2_Mel_L
+  mark_mat_Mel_Large[5,]<-G2_1_Mel_L
+  mark_mat_Mel_Large[6,]<-G2_2_Mel_L
+  
+  # mark_mat_Mel_Small[1,]<-G1_1_Mel_Sm
+  # mark_mat_Mel_Small[2,]<-G1_2_Mel_Sm
+  # mark_mat_Mel_Small[3,]<-S_1_Mel_Sm
+  # mark_mat_Mel_Small[4,]<-S_2_Mel_Sm
+  # mark_mat_Mel_Small[5,]<-G2_1_Mel_Sm
+  # mark_mat_Mel_Small[6,]<-G2_2_Mel_Sm
+  
+  
+  #Small_Cor <- cor(t(mark_mat_Mel_Small),use = 'pairwise.complete.obs')
+  Large_Cor <- cor(t(mark_mat_Mel_Large),use = 'pairwise.complete.obs')
+  
+  
+  #Small_Cor <- Small_Cor * neg_mat
+  #Small_Cor <- Small_Cor[lower.tri(Small_Cor)]
+  #Small_Cor_hold <- c(Small_Cor_hold,Small_Cor)
+  Large_Cor <- Large_Cor #* neg_mat
+  Large_Cor<- Large_Cor[lower.tri(Large_Cor)]
+  
+  #Large_Cor_hold <- c(Large_Cor_hold,Large_Cor)
+  Mat_LC[,j] <- Large_Cor
+}
+
+mark_mat_Mel_cor <- cor(t(mark_mat_Mel),use = 'pairwise.complete.obs')
+mark_mat_Mon_cor <- cor(t(mark_mat_Mon),use = 'pairwise.complete.obs')
+
+difs <- abs(mark_mat_Mel_cor[lower.tri(mark_mat_Mel_cor)] - mark_mat_Mon_cor[lower.tri(mark_mat_Mon_cor)])
+vars <- rowSds(Mat_LC,na.rm=T)
+
+difs <- c()
+for(i in 1:500){
+  difs<- c(difs,(Mat_LC[,i] -mark_mat_Mel_cor[lower.tri(mark_mat_Mel_cor)]))
+}
+
+
+
+```
+
+```{r Graph match Greedy Approach}
+CPC_f_test <- CPC_f %>% select(Id,G1_p,S_p,G2_p)
+CPC_f_test <- CPC_f_test %>% dplyr::filter(Id %in% colnames(t7_Melanomas))
+CPC_f_test <- reshape2::melt(CPC_f_test,id.vars = 'Id')
+
+CPC_f_test <- CPC_f_test[order(-CPC_f_test$value),]
+CPC_f_test$variable <- as.character(CPC_f_test$variable )
+CPC_f_test_new <- CPC_f_test
+
+
+G1_IDs <- c()
+S_IDs <- c()
+G2_IDs <- c()
+S_len <- floor(ncol(t7_Melanomas)*.25)
+G1_len <- floor(ncol(t7_Melanomas)*.5)
+G2_len <- floor(ncol(t7_Melanomas)*.25)
+
+
+while(nrow(CPC_f_test_new)> 2){
+  if(CPC_f_test_new$variable[1] == 'S_p'){
+    if(length(S_IDs) >= S_len){
+      CPC_f_test_new <- CPC_f_test_new[-1,]
+    }
+    else{
+      S_IDs<- c(S_IDs,CPC_f_test_new$Id[1])
+      CPC_f_test_new<-CPC_f_test_new %>% dplyr::filter(Id != CPC_f_test_new$Id[1])
+    }
+  }
+  if(CPC_f_test_new$variable[1] == 'G1_p'){
+    if(length(G1_IDs) >= G1_len){
+      CPC_f_test_new <- CPC_f_test_new[-1,]
+    }
+    else{
+      G1_IDs<- c(G1_IDs,CPC_f_test_new$Id[1])
+      CPC_f_test_new<-CPC_f_test_new %>% dplyr::filter(Id != CPC_f_test_new$Id[1])
+    }
+  }
+  if(CPC_f_test_new$variable[1] == 'G2_p'){
+    if(length(G2_IDs) > G2_len){
+      CPC_f_test_new <- CPC_f_test_new[-1,]
+    }
+    else{
+      G2_IDs<- c(G2_IDs,CPC_f_test_new$Id[1])
+      CPC_f_test_new<-CPC_f_test_new %>% dplyr::filter(Id != CPC_f_test_new$Id[1])
+    }
+  }
+}
+
+CPC_f_Mel<-CPC_f %>% dplyr::filter(Id %in% colnames(t7_Melanomas))
+CPC_f_Mel$Assign <- NA
+CPC_f_Mel$Assign[CPC_f_Mel$Id %in% S_IDs] <- 'S'
+CPC_f_Mel$Assign[CPC_f_Mel$Id %in% G1_IDs] <- 'G1'
+CPC_f_Mel$Assign[CPC_f_Mel$Id %in% G2_IDs] <- 'G2'
+
+
+
+### Error Bars
+
+eb_G1_s <- c()
+eb_S_s<- c()
+eb_G2_s<- c()
+eb_G1_l <- c()
+eb_S_l<- c()
+eb_G2_l <- c()
+
+for(i in 1:100){
+  samp_L <- sample(ncol(t7_Melanomas_Large),ncol(t7_Melanomas_Large)/2)
+  samp_S <- sample(ncol(t7_Melanomas_Small),ncol(t7_Melanomas_Small)/2)
+  samp_S_id <- colnames(t7_Melanomas_Small)[samp_S]
+  samp_L_id <- colnames(t7_Melanomas_Large)[samp_L]
+  All_ids <- c(samp_S_id,samp_L_id)
+  CPC_f_test_eb <- CPC_f_test %>% dplyr::filter(Id  %in% All_ids)
+  G1_IDs <- c()
+  S_IDs <- c()
+  G2_IDs <- c()
+  S_len <- floor(length(All_ids)*.25)
+  G1_len <- floor(length(All_ids)*.5)
+  G2_len <- floor(length(All_ids)*.25)
+  CPC_f_test_eb_hold <- CPC_f_test_eb
+  while(nrow(CPC_f_test_eb)> 2){
+    if(CPC_f_test_eb$variable[1] == 'S_p'){
+      if(length(S_IDs) >= S_len){
+        CPC_f_test_eb <- CPC_f_test_eb[-1,]
+      }
+      else{
+        S_IDs<- c(S_IDs,CPC_f_test_eb$Id[1])
+        CPC_f_test_eb<-CPC_f_test_eb %>% dplyr::filter(Id != CPC_f_test_eb$Id[1])
+      }
+    }
+    if(CPC_f_test_eb$variable[1] == 'G1_p'){
+      if(length(G1_IDs) >= G1_len){
+        CPC_f_test_eb <- CPC_f_test_eb[-1,]
+      }
+      else{
+        G1_IDs<- c(G1_IDs,CPC_f_test_eb$Id[1])
+        CPC_f_test_eb<-CPC_f_test_eb %>% dplyr::filter(Id != CPC_f_test_eb$Id[1])
+      }
+    }
+    if(CPC_f_test_eb$variable[1] == 'G2_p'){
+      if(length(G2_IDs) > G2_len){
+        CPC_f_test_eb <- CPC_f_test_eb[-1,]
+      }
+      else{
+        G2_IDs<- c(G2_IDs,CPC_f_test_eb$Id[1])
+        CPC_f_test_eb<-CPC_f_test_eb %>% dplyr::filter(Id != CPC_f_test_eb$Id[1])
+      }
+    }
+  }
+  
+  CPC_f_test_eb_hold$Assign <- NA
+  CPC_f_test_eb_hold$Assign[CPC_f_test_eb_hold$Id %in% S_IDs] <- 'S'
+  CPC_f_test_eb_hold$Assign[CPC_f_test_eb_hold$Id %in% G1_IDs] <- 'G1'
+  CPC_f_test_eb_hold$Assign[CPC_f_test_eb_hold$Id %in% G2_IDs] <- 'G2'
+  Mel_sm_sort_eb <- CPC_f_test_eb_hold %>% dplyr::filter(Id %in% colnames(t7_Melanomas_Small))
+  Mel_lg_sort_eb <- CPC_f_test_eb_hold %>% dplyr::filter(Id %in% colnames(t7_Melanomas_Large))
+  eb_G1_l<-c(eb_G1_l,sum(Mel_lg_sort_eb$Assign=='G1',na.rm = T)/nrow(Mel_lg_sort_eb))
+  eb_S_l<-c(eb_S_l,sum(Mel_lg_sort_eb$Assign=='S',na.rm = T)/nrow(Mel_lg_sort_eb))
+  eb_G2_l<-c(eb_G2_l,sum(Mel_lg_sort_eb$Assign=='G2',na.rm = T)/nrow(Mel_lg_sort_eb))
+  eb_G1_s<- c(eb_G1_s,sum(Mel_sm_sort_eb$Assign=='G1',na.rm = T)/nrow(Mel_sm_sort_eb))
+  eb_S_s <- c(eb_S_s,sum(Mel_sm_sort_eb$Assign=='S',na.rm = T)/nrow(Mel_sm_sort_eb))
+  eb_G2_s<- c(eb_G2_s,sum(Mel_sm_sort_eb$Assign=='G2',na.rm = T)/nrow(Mel_sm_sort_eb))
+  
+}
+
+
+
+
+```
+
+```{r Graph Match Optimal}
+
+```
+
+```{r CDC assignment SubPop plotting}
+
+
+CPC_f_Mel$Assign <- factor(CPC_f_Mel$Assign, levels = c('G1','S','G2'), ordered = FALSE)
+Mel_sm_sort <- CPC_f_Mel %>% dplyr::filter(Id %in%colnames(t7_Melanomas_Small))
+Mel_lg_sort <- CPC_f_Mel %>% dplyr::filter(Id %in% colnames(t7_Melanomas_Large))
+Mel_lg_sort<- Mel_lg_sort %>% dplyr::filter(is.na(Assign)==F)
+
+#Mon_sort <- CPC_f %>% filter(Id %in% Monocytes$id)
+#Mon_sort<- Mon_sort %>% filter(is.na(Assign)==F)
+
+Mel_cc_plot <- as.data.frame(matrix(data = NA,nrow = 6,ncol = 4))
+colnames(Mel_cc_plot) <- c('Phase','Pct','Cluster','SD')
+Mel_cc_plot$Phase[c(1,4)] <- 'G1'
+Mel_cc_plot$Phase[c(2,5)] <- 'S'
+Mel_cc_plot$Phase[c(3,6)] <- 'G2'
+Mel_cc_plot$Pct[1] <- sum(Mel_lg_sort$Assign=='G1')/nrow(Mel_lg_sort)
+Mel_cc_plot$Pct[2] <- sum(Mel_lg_sort$Assign=='S')/nrow(Mel_lg_sort)
+Mel_cc_plot$Pct[3] <- sum(Mel_lg_sort$Assign=='G2')/nrow(Mel_lg_sort)
+Mel_cc_plot$Pct[4] <- sum(Mel_sm_sort$Assign=='G1',na.rm=T)/nrow(Mel_sm_sort)
+Mel_cc_plot$Pct[5] <- sum(Mel_sm_sort$Assign=='S',na.rm=T)/nrow(Mel_sm_sort)
+Mel_cc_plot$Pct[6] <- sum(Mel_sm_sort$Assign=='G2',na.rm=T)/nrow(Mel_sm_sort)
+Mel_cc_plot$Cluster[c(1:3)] <- 'Cluster A'
+Mel_cc_plot$Cluster[c(4:6)] <- 'Cluster B'
+Mel_cc_plot$SD[1] <- sd(eb_G1_l,na.rm = T)
+Mel_cc_plot$SD[2] <- sd(eb_S_l,na.rm = T)
+Mel_cc_plot$SD[3] <- sd(eb_G2_l,na.rm = T)
+Mel_cc_plot$SD[4] <- sd(eb_G1_s,na.rm = T)
+Mel_cc_plot$SD[5] <- sd(eb_S_s,na.rm = T)
+Mel_cc_plot$SD[6] <- sd(eb_G2_s,na.rm = T)
+
+
+Mel_cc_plot$Phase <- factor(Mel_cc_plot$Phase, levels = c('G1','S','G2'), ordered = FALSE)
+
+dist <- ggplot(Mel_cc_plot,aes(y = Pct,x =Phase, fill = Cluster)) + 
+  geom_bar(stat="identity",width=.5, position = "dodge") + 
+  geom_errorbar(aes(ymin = Pct-SD, ymax = Pct+SD, x =Phase),
+  position =position_dodge(.5), width = 0.2) + ylab('Fraction of Cells')+
+  ggtitle('Melanoma Subpopulation Cell Cycle Fractions')+ 
+  theme_classic() + scale_fill_manual(values = c("#808080", "#dcdcdc"))+
+  theme(axis.title.x = element_text(size = 20),axis.title.y = element_text(size = 20),axis.text.x = element_text(size = 20),
+        axis.text.y = element_text(size = 20),
+        legend.key.size = unit(1, 'cm'), #change legend key size
+        legend.key.height = unit(1, 'cm'), #change legend key height
+        legend.key.width = unit(1, 'cm'), #change legend key width
+        legend.title = element_text(size=0), #change legend title font size
+        legend.text = element_text(size=20),
+        legend.position=c(.70, .75)) 
+dist
+#ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/figs/CDC/CDC_dist.png',plot = dist,height = unit(4, "cm"),width = unit(5, "cm"))
+
+
+
+```
+
+```{r Protein Set Enrichment analysis Melanoma}
+
+#t7_Melanomas_Large_sub <- t7_Melanomas_Large[,sample(ncol(t7_Melanomas_Large),ncol(t7_Melanomas_Small))]
+
+#all_prot_M <- as.data.frame(t(t7_Melanomas_Large_sub))
+
+t7_Melanomas_Large_filt <- as.data.frame(t7) %>% dplyr::select(Melanoma_Large$id)
+t7_Melanomas_Small_filt <- as.data.frame(t7) %>% dplyr::select(Melanoma_Small$id)
+
+all_prot_U <- as.data.frame(t(t7_Melanomas_Small_filt))
+
+
+all_prot_U_G1 <- all_prot_U %>% dplyr::select(c(G1_mark1[1:2],G1_mark2[1:2]))
+all_prot_U_S <- all_prot_U %>% dplyr::select(c(S_mark1[1:3],S_mark2[1:3]))
+all_prot_U_G2 <- all_prot_U %>% dplyr::select(c(G2_mark1,G2_mark2))
+
+all_prot_U <- as.data.frame(t(t7_Melanomas_Small))
+
+Monocyte_CC <- data.frame(matrix(NA, nrow = nrow(all_prot_U), ncol = 3))
+colnames(Monocyte_CC) <- c('G1','S','G2')
+Monocyte_CC$G1 <- rowMeans(all_prot_U_G1,na.rm = T)
+Monocyte_CC$S <- rowMeans(all_prot_U_S,na.rm = T)
+Monocyte_CC$G2 <- rowMeans(all_prot_U_G2,na.rm = T)
+
+####
+
+### Bootstrap,zscore
+# H1 <- matrix(data = NA,nrow = nrow(t7_Melanomas_Small),ncol = 100)
+# H2 <- matrix(data = NA,nrow = nrow(t7_Melanomas_Small),ncol = 100)
+# H3 <- matrix(data = NA,nrow = nrow(t7_Melanomas_Small),ncol = 100)
+# 
+# U1 <- matrix(data = NA,nrow = nrow(t7_Melanomas_Small),ncol = 100)
+# U2 <- matrix(data = NA,nrow = nrow(t7_Melanomas_Small),ncol = 100)
+# U3 <- matrix(data = NA,nrow = nrow(t7_Melanomas_Small),ncol = 100)
+
+# library(gtools)
+# for (i in 1:(ncol(all_prot_M))){
+#     for (k in 1:100){
+#       H1[i,k] <- cor(all_prot_M[i],permute(Melanoma_CC$G1),use = 'pairwise.complete.obs')
+#       U1[i,k] <- cor(all_prot_U[i],permute(Monocyte_CC$G1),use = 'pairwise.complete.obs')
+#     }
+#     for (k in 1:100){
+#       H2[i,k] <- cor(all_prot_M[i],permute(Melanoma_CC$S),use = 'pairwise.complete.obs')
+#       U2[i,k] <- cor(all_prot_U[i],permute(Monocyte_CC$S),use = 'pairwise.complete.obs')
+#     }
+#     for (k in 1:100){
+#     H3[i,k] <- cor(all_prot_M[i],permute(Melanoma_CC$G2),use = 'pairwise.complete.obs')
+#     U3[i,k] <- cor(all_prot_U[i],permute(Monocyte_CC$G2),use = 'pairwise.complete.obs')
+#     }
+# }
+
+
+
+# ### Permute
+# df_cc_cors_M <- data.frame(matrix(NA, nrow = (ncol(all_prot_M)), ncol = 4))
+# colnames(df_cc_cors_M) <- c('prot','G1','S','G2')
+# for (i in 1:(ncol(all_prot_M))){
+#   df_cc_cors_M$prot[i] <- colnames(all_prot_M)[i]
+#   df_cc_cors_M$G1[i] <- (cor(Melanoma_CC$G1,all_prot_M[i],use = 'pairwise.complete.obs')-mean(H1[i,],na.rm = T))/sd(H1[i,],na.rm = T)
+#   df_cc_cors_M$S[i] <- (cor(Melanoma_CC$S,all_prot_M[i],use = 'pairwise.complete.obs') - mean(H2[i,],na.rm = T))/sd(H2[i,],na.rm = T)
+#   df_cc_cors_M$G2[i] <- (cor(Melanoma_CC$G2,all_prot_M[i],use = 'pairwise.complete.obs')- mean(H3[i,],na.rm = T))/sd(H3[i,],na.rm = T)
+# }
+# 
+# df_cc_cors_U <- data.frame(matrix(NA, nrow = (ncol(all_prot_U)), ncol = 4))
+# colnames(df_cc_cors_U) <- c('prot','G1','S','G2')
+# for (i in 1:(ncol(all_prot_M))){
+#   df_cc_cors_U$prot[i] <- colnames(all_prot_M)[i]
+#   df_cc_cors_U$G1[i] <- (cor(Monocyte_CC$G1,all_prot_U[i],use = 'pairwise.complete.obs')-mean(U1[i,],na.rm = T))/sd(U1[i,],na.rm = T)
+#   df_cc_cors_U$S[i] <- (cor(Monocyte_CC$S,all_prot_U[i],use = 'pairwise.complete.obs') - mean(U2[i,],na.rm = T))/sd(U2[i,],na.rm = T)
+#   df_cc_cors_U$G2[i] <- (cor(Monocyte_CC$G2,all_prot_U[i],use = 'pairwise.complete.obs')- mean(U3[i,],na.rm = T))/sd(U3[i,],na.rm = T)
+# }
+
+####
+
+df_cc_cors_U <- data.frame(matrix(NA, nrow = ncol(all_prot_U), ncol = 4))
+colnames(df_cc_cors_U) <- c('prot','G1','S','G2')
+for (i in 1:ncol(all_prot_U)){
+  df_cc_cors_U$prot[i] <- colnames(all_prot_U[i])
+  df_cc_cors_U$G1[i] <- cor(Monocyte_CC$G1,all_prot_U[i],use = 'pairwise.complete.obs')
+  df_cc_cors_U$S[i] <- cor(Monocyte_CC$S,all_prot_U[i],use = 'pairwise.complete.obs')
+  df_cc_cors_U$G2[i] <- cor(Monocyte_CC$G2,all_prot_U[i],use = 'pairwise.complete.obs')
+}
+df_cc_cors_U[is.na(df_cc_cors_U)==T] = 0
+view(df_cc_cors_U)
+
+samp_list <- permute(colnames(t7_Melanomas_Large))
+df_cc_cors_M <- data.frame(matrix(NA, nrow = (ncol(all_prot_U)), ncol = 1))
+colnames(df_cc_cors_M) <- c('prot')
+df_cc_cors_M$prot <- rownames(t7_Melanomas_Large)
+
+cor_compare <- matrix(data = NA,nrow= 3855,ncol = 11)
+for(i in 1:11){
+  
+  sta <- 1 + ncol(t7_Melanomas_Small)*(i-1)
+  stp <- ncol(t7_Melanomas_Small)*(i)
+  
+  t7_Melanomas_Large_sub <- t7_Melanomas_Large_filt %>% dplyr::select(samp_list[sta:stp])
+
+  all_prot_M <- as.data.frame(t(t7_Melanomas_Large_sub))
+  
+  all_prot_M_G1  <- all_prot_M %>% dplyr::select(c(G1_mark1[1:2],G1_mark2[1:2]))
+  all_prot_M_S <- all_prot_M %>% dplyr::select(c(S_mark1,S_mark2))
+  all_prot_M_G2 <- all_prot_M %>% dplyr::select(c(G2_mark1,G2_mark2))
+  
+  t7_Melanomas_Large_sub <- t7_Melanomas_Large %>% dplyr::select(samp_list[sta:stp])
+  all_prot_M <- as.data.frame(t(t7_Melanomas_Large_sub))
+  
+  Melanoma_CC <- data.frame(matrix(NA, nrow = nrow(all_prot_M), ncol = 3))
+  colnames(Melanoma_CC) <- c('G1','S','G2')
+  Melanoma_CC$G1 <- rowMeans(all_prot_M_G1,na.rm = T)
+  Melanoma_CC$S <- rowMeans(all_prot_M_S,na.rm = T)
+  Melanoma_CC$G2 <- rowMeans(all_prot_M_G2,na.rm = T)
+  
+  df_cc_cors_M_ <- data.frame(matrix(NA, nrow = (ncol(all_prot_M)), ncol = 3))
+  colnames(df_cc_cors_M_) <- c(paste0('G1M',i),paste0('SM',i),paste0('G2M',i))
+  for (j in 1:(ncol(all_prot_M))){
+    #df_cc_cors_M_$prot[i] <- colnames(all_prot_M[i])
+    df_cc_cors_M_[j,1] <- cor(Melanoma_CC$G1,all_prot_M[j],use = 'pairwise.complete.obs')
+    df_cc_cors_M_[j,2] <- cor(Melanoma_CC$S,all_prot_M[j],use = 'pairwise.complete.obs')
+    df_cc_cors_M_[j,3] <- cor(Melanoma_CC$G2,all_prot_M[j],use = 'pairwise.complete.obs')
+  
+  }
+  #df_cc_cors_M_[is.na(df_cc_cors_M_)==T] = 0
+  df_cc_cors_M_[df_cc_cors_M_ == 1] = NA
+  df_cc_cors_M_[df_cc_cors_M_ == -1] = NA
+  df_cc_cors_M<- cbind(df_cc_cors_M,df_cc_cors_M_)
+  cor_compare[,i] <- c(df_cc_cors_M_[,1],df_cc_cors_M_[,2],df_cc_cors_M_[,3])
+}
+
+look <- cor(cor_compare,use = 'pairwise.complete.obs')
+look<- look[lower.tri(look)]
+
+infoM <- data.frame(matrix(NA, nrow = 3000, ncol = 4 ))
+infoU <- data.frame(matrix(NA, nrow = 3000, ncol = 4 ))
+colnames(infoM) <- c('G1_M','S_M','G2_M','FDR')
+colnames(infoU) <- c('G1_U','S_U','G2_U','FDR')
+
+count = 0
+df <- cbind(df_cc_cors_M,df_cc_cors_U)
+#df <- cbind(df_cc_cors_M)
+df$prot <- NULL
+#colnames(df) <- c('G1M','SM','G2M','prot','G1U','SU','G2U')
+#colnames(df) <- c('prot','G1M','SM','G2M')
+test <- 0
+unique_GO_terms <- unique(GO_db$GO_term_name)
+
+
+
+for (i in 1:length(unique_GO_terms)){
+  GO_db_lim <- GO_db %>% dplyr::filter(GO_term_name == unique_GO_terms[i])
+  df_temp <- df %>% dplyr::filter(prot %in% GO_db_lim$Uniprot)
+  if (nrow(df_temp) > 2){
+    if (nrow(df_temp) < 100){
+      df_temp$prot <- NULL
+      df_temp.m <- reshape2::melt(df_temp,id.vars = NULL)
+      df_temp.m$variable <- as.character(df_temp.m$variable)
+      df_temp.m$variable[startsWith(df_temp.m$variable, 'G1M')] <- 'G1M'
+      df_temp.m$variable[startsWith(df_temp.m$variable, 'SM')] <- 'SM'
+      df_temp.m$variable[startsWith(df_temp.m$variable, 'G2M')] <- 'G2M'
+      df_temp.m <- df_temp.m %>% filter(is.na(value)==F)
+      a <-aov(value~variable,data = df_temp.m)
+      count = count+1
+      
+      df_M <- df_cc_cors_M %>% filter(prot %in% GO_db_lim$Uniprot)
+      df_M$prot <- NULL
+      df_U <- df_cc_cors_U %>% filter(prot %in% GO_db_lim$Uniprot)
+      df_U$prot <- NULL
+      
+      vect <- colMedians(as.matrix(df_M),na.rm = T)
+      infoM[count,1]<- median(vect[seq(1, length(vect), by = 3)],na.rm = T)
+      infoM[count,2]<- median(vect[seq(2, length(vect), by = 3)],na.rm = T)
+      infoM[count,3]<- median(vect[seq(3, length(vect), by = 3)],na.rm = T)
+      infoM[count,4] <- summary(a)[[1]][["Pr(>F)"]][1]
+      
+      infoU[count,1:3]<- colMedians(as.matrix(df_U),na.rm = T)
+      infoU[count,4] <- summary(a)[[1]][["Pr(>F)"]][1]
+      
+      rownames(infoM)[count] <- unique_GO_terms[i]
+      rownames(infoU)[count] <- unique_GO_terms[i]
+      
+      
+    }
+  }
+}
+
+
+infoM <- infoM %>% filter(is.na(FDR)==F)
+infoM$fdrnew <- p.adjust(infoM$FDR,method = 'BH')
+infoU <- infoU %>% filter(is.na(FDR)==F)
+infoU$fdrnew <- p.adjust(infoU$FDR,method = 'BH')
+
+infoU <- infoU %>% filter(fdrnew < .05)
+infoM <- infoM %>% filter(fdrnew < .05)
+
+infoM$FDR <- NULL
+infoM$fdrnew <- NULL
+infoM$blank <- 0
+infoU$fdrnew <- NULL
+infoU$FDR <- NULL
+PSEA_full <- cbind(infoM,infoU)
+
+
+#PSEA_full <- PSEA_full[order(rownames(PSEA_full)),]
+col_fun = colorRamp2(c(-.2, 0, .2), c("blue", "white", "red"),space = 'RGB',transparency = 0)
+
+#Computing how similar or different a go term is between cell types
+PSEA_full$diff <- (abs(PSEA_full$G1_M-PSEA_full$G1_U) +
+                abs(PSEA_full$S_M-PSEA_full$S_U)+abs(PSEA_full$G2_M-PSEA_full$G2_U))/(abs(PSEA_full$G1_M)+
+                                                                   abs(PSEA_full$G1_U) +
+                                               abs(PSEA_full$S_M)+abs(PSEA_full$S_U)+
+                                              abs(PSEA_full$G2_M)+abs(PSEA_full$G2_U))
+
+
+PSEA_full <- PSEA_full[order(-PSEA_full$diff),]
+PSEA_full[PSEA_full >.2] <- .2
+PSEA_full[PSEA_full < -.2] <- -.2
+# Plotting most similar GO terms between cell types
+
+PSEA_full$diff <- NULL
+PSEA_full<- as.matrix(PSEA_full)
+PSEA_full_<- PSEA_full[c(2,5,6,12,14,15,31,42,44,48,50,69,73,101,110,127,172,194),]
+
+#Z-score correlations to account for different magnitude of correlations because averaging 
+#multiple subsets of cells from large population to account for difference in cell numbers
+
+m1 <- mean(c(PSEA_full_[,1],PSEA_full_[,2],PSEA_full_[,3]),na.rm = T)
+m2 <- mean(c(PSEA_full_[,5],PSEA_full_[,6],PSEA_full_[,7]),na.rm = T)       
+sd1 <- sd(c(PSEA_full_[,1],PSEA_full_[,2],PSEA_full_[,3]),na.rm = T)
+sd2 <- sd(c(PSEA_full_[,5],PSEA_full_[,6],PSEA_full_[,7]),na.rm = T)
+
+PSEA_full_[,1:3] <- (PSEA_full_[,1:3]-m1)/sd1
+PSEA_full_[,5:7] <- (PSEA_full_[,5:7]-m2)/sd2
+
+spa <- Heatmap(PSEA_full_,cluster_columns = F,cluster_rows = T,show_heatmap_legend = T,row_names_gp = grid::gpar(fontsize = 8),
+        show_row_dend = FALSE )
+            
+PSEA_full_2 <- PSEA_full_[row_order(spa),]
+write(rownames(PSEA_full_2),'/Users/andrewleduc/Desktop/smallvLarge.txt')
+
+
+```
+
+
+
+
+
+
+
+

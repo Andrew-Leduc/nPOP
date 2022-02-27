@@ -1,0 +1,581 @@
+---
+title: "Melanoma_SubPOP"
+output: html_notebook
+---
+
+Loading data
+```{r Load Data}
+
+source("functions_parameters.R")
+
+#t7_Monocytes <- read.csv('../dat/Proccessed_data/t7_Monocytes.csv',row.names = 1)
+#t7_Melanomas <- read.csv('../dat/Proccessed_data/t7_Melanomas.csv',row.names = 1)
+
+# Databases for Protein Set Enrichment Analysis
+GO_db <- read.delim("../dat/raw_data/GOA_db.txt", sep = " ")
+
+# Data base for converting Gene Names to Proteins
+convert <- read.delim('../dat/raw_data/human_uniprot_db.txt')
+convert$Gene.names <- as.character(convert$Gene.names)
+convert$Gene.names2 <- gsub(' .*','',convert$Gene.names)
+
+#load Complexes database
+comps <- read.delim('../dat/raw_data/coreComplexes.txt')
+comps <- comps %>% distinct(ComplexName, .keep_all = T)
+
+#Load Meta data for updating
+meta <- read.csv('../dat/Proccessed_data/meta.csv',row.names = 1)
+meta_mel <- meta %>% filter(celltype == 'm')
+meta_mon <- meta %>% filter(celltype == 'u')
+
+t7 <- read.csv('../dat/Proccessed_data/t7.csv',row.names = 1)
+t7_Monocytes <- t7 %>% dplyr::select(intersect(colnames(t7),meta_mon$id))
+t7_Melanomas <- t7 %>% dplyr::select(intersect(colnames(t7),meta_mel$id))
+
+
+```
+
+Here we are Computing PCA in the space of the Melanoma cells where we have noticed 2 populations. We overlay markers from Emert et al. (2021) paper on the same melanoma cells that are predictive of either drug resistance or drug suceptibility. We compute p values and notice strong allignment with our two observed clusters
+
+```{r  Sub population Analysis of Melanoma Cells Drug Resistance}
+#Load markers for Drug resistance from Emert et al. (2021)
+
+
+raj <- read.csv('../dat/raw_data/Melanoma_diff_exp_raj.csv')
+raj <- raj %>% left_join(convert,by = c('gene_name' = 'Gene.names2'))
+raj <- raj %>% dplyr::filter(padj < .1)
+
+Drug_resist <- raj %>% dplyr::filter(log2FoldChange >1.5)
+Main_pop <- raj %>% dplyr::filter(log2FoldChange < 0)
+
+
+
+#PCA
+
+mat.sc.imp <- as.matrix(t7_Melanomas)
+mat.sc.imp <- cr_norm_log(mat.sc.imp)
+
+X.m <-  mat.sc.imp
+pca.imp.cor <- cor(X.m, use = 'pairwise.complete.obs',method = c('pearson'))
+
+# PCA
+sc.pca<-eigen(pca.imp.cor)
+scx<-as.data.frame(sc.pca$vectors)
+colnames(scx)<-paste0("PC",1:ncol(scx))
+scx$cells<-colnames(pca.imp.cor)
+
+# Percent of variance explained by each principle component
+pca_var <- sc.pca$values
+percent_var<- pca_var/sum(pca_var)*100
+plot(1:length(percent_var), percent_var, xlab="PC", ylab="% of variance explained")
+
+# Map meta data
+pca.melt <- melt(scx); colnames(pca.melt)<-c("id","pc","value")
+ev.melt.uniqueID_lim<-meta[,c(4:6)]
+
+pca.melt <- left_join(pca.melt,ev.melt.uniqueID_lim,by= 'id')
+pca.display <- reshape2::dcast(pca.melt, id + celltype + channel ~ pc, value.var = "value", fill=NA)
+
+PCx<-"PC1"
+PCy<-"PC2"
+
+
+# Color PCA by markers of Resistance
+
+#t7_pif_filt_mel <-as.data.frame(t7_pif_filt) %>%dplyr::select(colnames(t7_Melanomas))
+Res  <- t7_Melanomas %>% dplyr::filter(rownames(t7_Melanomas) %in% Drug_resist$Entry)
+Main <- t7_Melanomas %>% dplyr::filter(rownames(t7_Melanomas) %in% Main_pop$Entry)
+
+
+pca.display$Resistance_Markers <- colMedians(as.matrix(Res),na.rm = T)
+pca.display$Resistance_Markers[pca.display$Resistance_Markers > 1] <- 1
+pca.display$Resistance_Markers[pca.display$Resistance_Markers < -1] <- -1
+pca.display$Main_Population_Markers <- colMedians(as.matrix(Main),na.rm = T)
+pca.display$Main_Population_Markers[pca.display$Main_Population_Markers > 1] <- 1
+pca.display$Main_Population_Markers[pca.display$Main_Population_Markers < -1] <- -1
+
+sp4 <- ggscatter(pca.display, color = 'Resistance_Markers' ,x =PCx, y = PCy, size = 5, alpha=0.5) +
+  xlab("") +
+  ylab("") +
+  font("ylab",size=0) +
+  font("xlab",size=0) +
+  font("xy.text", size=0)+
+  rremove("legend") + 
+  ggtitle('Resistance Markers') + 
+  scale_color_gradient2(midpoint = 0, low = "blue", mid = "white",
+                          high = "red",name = '') + theme(plot.title = element_text(size = 20))
+
+bp_m <-ggscatter(pca.display, color = 'Main_Population_Markers' ,x =PCx, y = PCy, size = 8, alpha=0.5) +
+  xlab(paste0(PCx,"  (", round(percent_var[1],0),"%)")) +
+  ylab(paste0(PCy,"  (", round(percent_var[2],0),"%)")) +
+  font("ylab",size=30) +
+  font("xlab",size=30) +
+  font("xy.text", size=20)+
+  #rremove("legend") +
+  ggtitle('Main Population Markers') + 
+  theme(legend.key.height =  unit(.35, "cm"),legend.key.width  =  unit(3, "cm")) + 
+  scale_color_gradient2(midpoint = 0, low = "blue", mid = "white",
+                          high = "red",name = '') + theme(plot.title = element_text(size = 25))
+
+
+
+
+#Get Identifiers for subpopulations based off the GSEA
+Melanoma_Small <- pca.display %>% dplyr::filter(PC1 < -.07)
+Melanoma_Large <- pca.display %>% dplyr::filter(PC1 > -.07)
+
+t7_Melanomas_Small <- t7_Melanomas %>% dplyr::select(Melanoma_Small$id)
+t7_Melanomas_Large <- t7_Melanomas %>% dplyr::select(Melanoma_Large$id)
+
+#meta$sub <- NA
+#meta$sub[meta$id %in% colnames(t7_Melanomas_Large)] <- 'C1'
+#meta$sub[meta$id %in% colnames(t7_Melanomas_Small)] <- 'C2'
+
+#write.csv(t7_Melanomas_Small,'../dat/Proccessed_data/t7_Melanomas_Small.csv',row.names = T)
+#write.csv(t7_Melanomas_Large,'../dat/Proccessed_data/t7_Melanomas_Large.csv',row.names = T)
+#write.csv(meta,'../dat/Proccessed_data/meta.csv',row.names = T)
+
+#calc p val for marker clusters
+Res_small  <- t7_Melanomas_Small %>% filter(rownames(t7_Melanomas_Small) %in% Drug_resist$Entry)
+Res_large  <- t7_Melanomas_Large %>% filter(rownames(t7_Melanomas_Large) %in% Drug_resist$Entry)
+Res_small <- melt(Res_small)
+Res_small$variable <- 'Small'
+Res_large<- melt(Res_large)
+Res_large$variable <- 'Large'
+res_p <- rbind(Res_large,Res_small)
+res_p <- res_p %>% filter(is.na(value)==F)
+kruskal.test(value ~ variable, data = res_p)
+#3.864e-05
+
+Main_small <- t7_Melanomas_Small %>% filter(rownames(t7_Melanomas_Small) %in% Main_pop$Entry)
+Main_large <- t7_Melanomas_Large %>% filter(rownames(t7_Melanomas_Large) %in% Main_pop$Entry)
+Main_small<- melt(Main_small)
+Main_small$variable <- 'Small'
+Main_large <- melt(Main_large)
+Main_large$variable <- 'Large'
+main_p <- rbind(Main_large,Main_small)
+main_p <- main_p %>% filter(is.na(value)==F)
+kruskal.test(value ~ variable, data = main_p)
+kruskal.test(value ~ variable, data = res_p)
+bp_m
+#2.2e-16
+
+
+
+```
+Here we analyze cluster further and and compute protein set enrichment analysis between the two cluster. We identify many significant gene sets related to cell division.
+```{r  Sub population Analysis of Melanoma Cells GSEA}
+## GSEA on Sub population
+
+Melanoma_GSEA <- t7_Melanomas
+Melanoma_GSEA$prot <- rownames(Melanoma_GSEA)
+Melanoma_GSEA <- melt(Melanoma_GSEA,id.vars = 'prot')
+Melanoma_GSEA$Condition <- NA
+Melanoma_GSEA$Condition[Melanoma_GSEA$variable %in% Melanoma_Small$id] <- 'Small'
+Melanoma_GSEA$Condition[Melanoma_GSEA$variable %in% Melanoma_Large$id] <- 'Large'
+Melanoma_GSEA <- Melanoma_GSEA %>% filter(is.na(value)==F)
+#Melanoma_GSEA$variable <- NULL
+
+colnames(Melanoma_GSEA)<- c('Protein','SampID','Intensity','Condition')
+
+
+GSEA_out <- Population_GSEA(Melanoma_GSEA,GO_db,2)
+GSEA_out <- GSEA_out %>% filter(is.na(pVal)==F)
+
+# Multiple hypothesis testing correction
+GSEA_out$qVal <- p.adjust(GSEA_out$pVal, method = "BH")
+GSEA_out <- GSEA_out %>% filter(qVal < .0001)
+GSEA_out <- GSEA_out %>% filter(numberOfMatches > 2)
+GSEA_out$dif <- GSEA_out$Cond1med_int - GSEA_out$Cond2med_int
+
+
+#write.csv(GSEA_out,'../dat/Output_tables/Melanoma_SubPop_PSEA.csv')
+
+GO_db_set1 <- GO_db %>% filter(GO_term_name == 'protein secretion' )
+Gene_set1 <- t7_Melanomas %>% filter(rownames(t7_Melanomas) %in% GO_db_set1$Uniprot)
+pca.display$p53 <- colMedians(as.matrix(Gene_set1),na.rm = T)
+pca.display$p53[pca.display$p53 > 1] <- 1
+pca.display$p53[pca.display$p53 < -1] <- -1
+sp1 <-ggscatter(pca.display, color = 'p53' ,x =PCx, y = PCy, size = 5, alpha=0.5) +
+  xlab("") +
+  ylab("") +
+  font("ylab",size=0) +
+  font("xlab",size=0) +
+  font("xy.text", size=0)+
+  rremove("legend") + 
+  ggtitle('protein secretion') + theme(plot.title = element_text(size = 14)) +
+  scale_color_gradient2(midpoint = .2, low = "blue", mid = "white",
+                          high = "red",name = '')+ theme(plot.title = element_text(size = 20))
+
+GO_db_set1 <- GO_db %>% filter(GO_term_name == 'cellular senescence' )
+Gene_set1 <- t7_Melanomas %>% filter(rownames(t7_Melanomas) %in% GO_db_set1$Uniprot)
+pca.display$cell_sens <- colMedians(as.matrix(Gene_set1),na.rm = T)
+pca.display$cell_sens[pca.display$cell_sens > 1] <- 1
+pca.display$cell_sens[pca.display$cell_sens < -1] <- -1
+sp2 <-ggscatter(pca.display, color = 'cell_sens' ,x =PCx, y = PCy, size = 5, alpha=0.5) +
+  xlab("") +
+  ylab("") +
+  font("ylab",size=0) +
+  font("xlab",size=0) +
+  font("xy.text", size=0)+
+  rremove("legend") +
+  ggtitle('cellular senesence') +
+  scale_color_gradient2(midpoint = .0, low = "blue", mid = "white",
+                          high = "red",name = '') + theme(plot.title = element_text(size = 20))
+
+GO_db_set1 <- GO_db %>% filter(GO_term_name == 'positive regulation of cell cycle arrest')
+Gene_set1 <- t7_Melanomas %>% filter(rownames(t7_Melanomas) %in% GO_db_set1$Uniprot)
+pca.display$resp_c <- colMedians(as.matrix(Gene_set1),na.rm = T)
+pca.display$resp_c[pca.display$resp_c > 1] <- 1
+pca.display$resp_c[pca.display$resp_c < -1] <- -1
+sp3 <-ggscatter(pca.display, color = 'resp_c' ,x =PCx, y = PCy, size = 5, alpha=0.5) +
+  xlab("") +
+  ylab("") +
+  font("ylab",size=0) +
+  font("xlab",size=0) +
+  font("xy.text", size=0)+
+  rremove("legend") + 
+  ggtitle('positive regulation of cell cycle arrest') +
+  scale_color_gradient2(midpoint = .2, low = "blue", mid = "white",
+                          high = "red",name = '') + theme(plot.title = element_text(size = 20))
+
+
+
+GO_db_set1 <- GO_db %>% filter(GO_term_name == 'G2/M transition of mitotic cell cycle' )
+Gene_set1 <- t7_Melanomas %>% filter(rownames(t7_Melanomas) %in% GO_db_set1$Uniprot)
+pca.display$G2 <- colMedians(as.matrix(Gene_set1),na.rm = T)
+pca.display$G2[pca.display$G2 > 1] <- 1
+pca.display$G2[pca.display$G2 < -1] <- -1
+bp1 <-ggscatter(pca.display, color = 'G2' ,x =PCx, y = PCy, size = 5, alpha=0.5) +
+  xlab("") +
+  ylab("") +
+  font("ylab",size=0) +
+  font("xlab",size=0) +
+  font("xy.text", size=0)+
+  rremove("legend") + 
+  ggtitle('G2/M transition of mitotic cell cycle') + 
+  scale_color_gradient2(midpoint = .0, low = "blue", mid = "white",
+                          high = "red",name = '') + theme(plot.title = element_text(size = 20))
+
+GO_db_set1 <- GO_db %>% filter(GO_term_name == 'microtubule-based process' )
+Gene_set1 <- t7_Melanomas %>% filter(rownames(t7_Melanomas) %in% GO_db_set1$Uniprot)
+pca.display$tub <- colMedians(as.matrix(Gene_set1),na.rm = T)
+pca.display$tub[pca.display$tub > 1] <- 1
+pca.display$tub[pca.display$tub < -1] <- -1
+bp2 <-ggscatter(pca.display, color = 'tub' ,x =PCx, y = PCy, size = 5, alpha=0.5) +
+  xlab("") +
+  ylab("") +
+  font("ylab",size=0) +
+  font("xlab",size=0) +
+  font("xy.text", size=0)+
+  rremove("legend") +
+  ggtitle('microtubule-based process') + 
+  scale_color_gradient2(midpoint = .0, low = "blue", mid = "white",
+                          high = "red",name = '')+ theme(plot.title = element_text(size = 20))
+
+
+
+GO_db_set1 <- GO_db %>% filter(GO_term_name == 'regulation of cyclin-dependent protein kinase activity')
+Gene_set1 <- t7_Melanomas %>% filter(rownames(t7_Melanomas) %in% GO_db_set1$Uniprot)
+pca.display$gluc <- colMedians(as.matrix(Gene_set1),na.rm = T)
+pca.display$gluc[pca.display$gluc > 1] <- 1
+pca.display$gluc[pca.display$gluc < -1] <- -1
+bp3 <-ggscatter(pca.display, color = 'gluc' ,x =PCx, y = PCy, size = 5, alpha=0.5) +
+  xlab("") +
+  ylab("") +
+  font("ylab",size=0) +
+  font("xlab",size=0) +
+  font("xy.text", size=0)+
+  rremove("legend") + 
+  ggtitle('cyclin-dependent kinase activity') + 
+  scale_color_gradient2(midpoint = .0, low = "blue", mid = "white",
+                          high = "red",name = '')+ theme(plot.title = element_text(size = 20))
+
+GO_db_set1 <- GO_db %>% filter(GO_term_name == 'ubiquitin ligase complex')
+Gene_set1 <- t7_Melanomas %>% filter(rownames(t7_Melanomas) %in% GO_db_set1$Uniprot)
+pca.display$ccarr <- colMedians(as.matrix(Gene_set1),na.rm = T)
+pca.display$ccarr[pca.display$ccarr > 1] <- 1
+pca.display$ccarr[pca.display$ccarr < -1] <- -1
+bp4 <-ggscatter(pca.display, color = 'ccarr' ,x =PCx, y = PCy, size = 5, alpha=0.5) +
+  xlab("") +
+  ylab("") +
+  font("ylab",size=0) +
+  font("xlab",size=0) +
+  font("xy.text", size=0)+
+  rremove("legend") + 
+  ggtitle('ubiquitin ligase complex') + 
+  scale_color_gradient2(midpoint = .0, low = "blue", mid = "white",
+                          high = "red",name = '') + theme(plot.title = element_text(size = 20))
+
+
+```
+
+In the next two sections, we look to suggest the presence of complexes in our single cell data by computing similarity (cosine distance normalized for # of pairwise data points in comparison of two vectors) between proteins from a compex, and compare it to the distrobution of all pairwise euclidean distances.
+```{r Protein Complex Analysis Monocyte}
+
+# Compute Null Distribution for all pairwise euclidean distances in melanoma 
+Monocyte_null_dist <- Distance_euclid_py(as.matrix(t7_Monocytes),10)
+Monocyte_null_dist$Condition <- " All Proteins"
+Monocyte_null_dist <- Monocyte_null_dist %>% dplyr::select(Condition,value)
+
+Monocyte_Complexes <- data.frame(Complex_name = character(), pVal = numeric(),dist = numeric(),number_prots = numeric(), stringsAsFactors = FALSE)
+
+#calculate distances for each complex in dataset
+count <- 0
+for(i in 1:nrow(comps)){
+  #GO_term <- unique_GO_terms[i]
+  #GO_db_lim <- GO_db %>% dplyr::filter(GO_term_name == GO_term)
+  comp_list <- unlist(str_split(comps$subunits.UniProt.IDs.[i],';'))
+  GO_mat <- t7_Monocytes %>% filter(rownames(t7_Monocytes) %in% comp_list)
+  if (nrow(GO_mat) > 2){
+    GO_mat <- as.matrix(GO_mat)
+    #GO_weight <- Mon_weights[rownames(Mon_weights)%in%rownames(GO_mat),]
+    GO_cor <- Distance_euclid_py(GO_mat,10)
+    if(nrow(GO_cor) > 3){
+      count <- count+1
+      GO_cor$Condition <- 'Exp'
+      GO_cor <- GO_cor %>% dplyr::select(Condition,value)
+      Null_plus_dat <- rbind(Monocyte_null_dist,GO_cor)
+      aov_out <- aov(value ~ Condition, data = Null_plus_dat)
+      aov_out<- summary(aov_out)
+      aov_out <- data.frame(aov_out[[1]])
+      
+      Monocyte_Complexes[count,1] <- comps$ComplexName[i]
+      Monocyte_Complexes[count,2] <- aov_out[1,5]
+      Monocyte_Complexes[count,3] <- median(GO_cor$value)
+      Monocyte_Complexes[count,4] <- nrow(GO_mat)
+    }
+  }
+}
+
+Monocyte_Complexes$qVal <- p.adjust(Monocyte_Complexes$pVal, method = 'BH')
+Monocyte_Complexes <- Monocyte_Complexes %>% filter(qVal < .1)
+Monocyte_Complexes <- Monocyte_Complexes %>% filter(dist < median(Monocyte_null_dist$value))
+
+#write.csv(Monocyte_Complexes,'../dat/Output_tables/MonocyteComplex.csv')
+
+# Manually select Complexes to Plot
+
+
+Mon_comp_list <- c("BBS-chaperonin complex","40S ribosomal subunit, cytoplasmic","TNF-alpha/NF-kappa B signaling complex 6")
+
+Mon_comp_plot <- Monocyte_null_dist
+
+for (X in Mon_comp_list){
+  
+  comp_list <- unlist(str_split(comps$subunits.UniProt.IDs.[comps$ComplexName == X],';'))
+  GO_mat <- t7_Monocytes %>% filter(rownames(t7_Monocytes) %in% comp_list)
+  GO_mat <- as.matrix(GO_mat)
+  GO_cor <- Distance_euclid_py(GO_mat,10)
+  GO_cor$Condition <- X
+  GO_cor <- GO_cor %>% dplyr::select(Condition,value)
+  Mon_comp_plot <- rbind(Mon_comp_plot,GO_cor)
+  
+}
+
+Mon_comp_plot$Condition[Mon_comp_plot$Condition == "40S ribosomal subunit, cytoplasmic"] <- 'z ribosomal subunit, cytoplasmic'
+
+Mon_comp_plot$Condition[Mon_comp_plot$Condition == "TNF-alpha/NF-kappa B signaling complex 6"] <- 'TNF-alpha/NF-kappa B signaling complex'
+
+comp_mon <- ggplot(Mon_comp_plot,aes(x = log10(value),y = Condition)) +
+  geom_density_ridges(aes(fill = Condition),stat='binline' ,bins = 35,rel_min_height = 0.01,scale = 2,alpha = .0,color=NA) +
+  scale_fill_manual(values = c("#808080", "#007A39","#007A39","#007A39")) +
+  theme(legend.position = "none") + 
+  geom_density_ridges(data=subset(Mon_comp_plot, Condition %in% Mon_comp_list[1]),
+                      aes(fill = Condition),jittered_points = TRUE,rel_min_height = 0.01,scale = .15,alpha = .5)+
+  theme_bw() + coord_cartesian(xlim = c(-2,0)) + 
+  ggtitle('Monocyte Complexes') + ylab('') + 
+  xlab('Log10(Euclidean Distance)') +theme(legend.position = "none",axis.text=element_text(size=16),axis.title = element_text(size = 16),title = element_text(size = 18))+
+  geom_density_ridges(data=subset(Mon_comp_plot, Condition == 'TNF-alpha/NF-kappa B signaling complex'),
+                      aes(fill = Condition),jittered_points = TRUE,rel_min_height = 0.01,scale = .5,alpha = .5)+
+  geom_density_ridges(data=subset(Mon_comp_plot, Condition == 'z ribosomal subunit, cytoplasmic'),
+                      aes(fill = Condition),jittered_points = TRUE,point_alpha=.1,rel_min_height = 0.01,scale = .3,alpha = .5)+
+  geom_density_ridges(data=subset(Mon_comp_plot, Condition == ' All Proteins'),
+                      aes(fill = Condition),jittered_points = FALSE,rel_min_height = 0.02,scale = .7,alpha = .7) + coord_cartesian(xlim = c(-2,-.4))
+comp_mon
+
+```
+
+```{r Protein Complex Analysis Melanomas}
+Melanoma_null_dist <- Distance_euclid_py(as.matrix(t7_Melanomas),10)
+Melanoma_null_dist$Condition <- " All Proteins"
+Melanoma_null_dist <- Melanoma_null_dist %>% dplyr::select(Condition,value)
+
+
+Melanoma_Complexes <- data.frame(Complex_name = character(), pVal = numeric(),dist = numeric(),number_prots = numeric(), stringsAsFactors = FALSE)
+
+count <- 0
+for(i in 1:nrow(comps)){
+  #GO_term <- unique_GO_terms[i]
+  #GO_db_lim <- GO_db %>% dplyr::filter(GO_term_name == GO_term)
+  comp_list <- unlist(str_split(comps$subunits.UniProt.IDs.[i],';'))
+  GO_mat <- t7_Melanomas %>% filter(rownames(t7_Melanomas) %in% comp_list)
+  if (nrow(GO_mat) > 2){
+    GO_mat <- as.matrix(GO_mat)
+    GO_cor <- Distance_euclid_py(GO_mat,10)
+    if(nrow(GO_cor) > 2){
+      count <- count+1
+      GO_cor$Condition <- 'Exp'
+      GO_cor <- GO_cor %>% dplyr::select(Condition,value)
+      Null_plus_dat <- rbind(Melanoma_null_dist,GO_cor)
+      aov_out <- aov(value ~ Condition, data = Null_plus_dat)
+      aov_out<- summary(aov_out)
+      aov_out <- data.frame(aov_out[[1]])
+      
+      Melanoma_Complexes[count,1] <- comps$ComplexName[i]
+      Melanoma_Complexes[count,2] <- aov_out[1,5]
+      Melanoma_Complexes[count,3] <- median(GO_cor$value)
+      Melanoma_Complexes[count,4] <- nrow(GO_mat)
+      
+      
+
+    }
+  }
+}
+
+Melanoma_Complexes$qVal <- p.adjust(Melanoma_Complexes$pVal, method = 'BH')
+Melanoma_Complexes <- Melanoma_Complexes %>% filter(qVal < .1)
+Melanoma_Complexes <- Melanoma_Complexes %>% filter(dist < median(Melanoma_null_dist$value))
+
+# Manually select Complexes to Plot and make plot 
+write.csv(Melanoma_Complexes,'../dat/Output_tables/MelanomaComplex.csv')
+
+Mel_comp_list <- c("Ribosome, cytoplasmic","Kinase maturation complex 1","DGCR8 multiprotein complex")
+
+Mel_comp_plot <- Melanoma_null_dist
+
+for (X in Mel_comp_list){
+  
+  comp_list <- unlist(str_split(comps$subunits.UniProt.IDs.[comps$ComplexName == X],';'))
+  GO_mat <- t7_Melanomas %>% filter(rownames(t7_Melanomas) %in% comp_list)
+  GO_mat <- as.matrix(GO_mat)
+  GO_cor <- Distance_euclid_py(GO_mat,10)
+  GO_cor$Condition <- X
+  GO_cor <- GO_cor %>% dplyr::select(Condition,value)
+  Mel_comp_plot <- rbind(Mel_comp_plot,GO_cor)
+  
+}
+
+
+comp_mel <- ggplot(Mel_comp_plot,aes(x = log10(value),y = Condition)) +
+  geom_density_ridges(aes(fill = Condition),stat='binline' ,bins = 35,rel_min_height = 0.01,scale = 2,alpha = .0,color=NA) +
+  scale_fill_manual(values = c("#808080", "#F6BE00","#F6BE00","#F6BE00")) +
+  theme(legend.position = "none")+ 
+  geom_density_ridges(data=subset(Mel_comp_plot, Condition %in% Mel_comp_list[1]),
+                      aes(fill = Condition),jittered_points = TRUE,point_alpha=.01,rel_min_height = 0.01,scale = .3,alpha = .5)+
+  theme_bw() + coord_cartesian(xlim = c(-2,0)) + 
+  ggtitle('Melanoma Complexes') + ylab('') + 
+  xlab('Log10(Euclidean Distance)') +theme(legend.position = "none",axis.text=element_text(size=16),axis.title = element_text(size = 16),title = element_text(size = 18))+
+  geom_density_ridges(data=subset(Mel_comp_plot, Condition %in% Mel_comp_list[2]),
+                      aes(fill = Condition),jittered_points = TRUE,rel_min_height = 0.01,scale = .5,alpha = .5)+
+  geom_density_ridges(data=subset(Mel_comp_plot, Condition %in% Mel_comp_list[3]),
+                      aes(fill = Condition),jittered_points = TRUE,point_alpha=.5,rel_min_height = 0.01,scale = .3,alpha = .5)+
+  geom_density_ridges(data=subset(Mel_comp_plot, Condition == ' All Proteins'),
+                      aes(fill = Condition),jittered_points = FALSE,rel_min_height = 0.02,scale = .7,alpha = .7) + 
+  coord_cartesian(xlim = c(-2,-.4))
+
+comp_mel
+```
+
+```{r Protein Complex Differential between celltypes}
+### Comparing Differential Complexes in Both Cell Lines
+# Diff_Complexes <- data.frame(Complex_name = character(), pVal = numeric(),cos_dist_mel = numeric(),cos_dist_mon = numeric(),number_prots = numeric(), stringsAsFactors = FALSE)
+# 
+# count <- 0
+# for (i in 1:nrow(comps)){
+#   #GO_term <- unique_GO_terms[i]
+#   #GO_db_lim <- GO_db %>% dplyr::filter(GO_term_name == GO_term)
+#   comp_list <- unlist(str_split(comps$subunits.UniProt.IDs.[i],';'))
+#   GO_mat1 <- t7_Melanomas %>% filter(rownames(t7_Melanomas) %in% comp_list)
+#   GO_mat2 <- t7_Monocytes %>% filter(rownames(t7_Monocytes) %in% comp_list)
+#   if (nrow(GO_mat1) > 3){
+#     GO_mat1 <- as.matrix(GO_mat1)
+#     GO_mat2 <- as.matrix(GO_mat2)
+#     GO_weight1 <- Mel_weights[rownames(Mel_weights)%in%rownames(GO_mat1),]
+#     GO_weight1 <- GO_weight1 - .6
+#     GO_weight2 <- Mon_weights[rownames(Mon_weights)%in%rownames(GO_mat2),]
+#     GO_weight2 <- GO_weight2 - .6
+#     GO_cor1 <- Distance_cosine_weighted(GO_mat1,GO_weight1,10)
+#     GO_cor2 <- Distance_cosine_weighted(GO_mat2,GO_weight2,10)
+#     
+#     if(nrow(GO_cor1) > 3 && nrow(GO_cor2) > 3){
+#       count <- count +1
+#       GO_cor1$Condition <- 'type1'
+#       GO_cor2$Condition <- 'type2'
+#       GO_cor1 <- GO_cor1 %>% dplyr::select(Condition,value)
+#       GO_cor2 <- GO_cor2 %>% dplyr::select(Condition,value)
+#       Null_plus_dat <- rbind(GO_cor1,GO_cor2)
+#       aov_out <- aov(value ~ Condition, data = Null_plus_dat)
+#       aov_out<- summary(aov_out)
+#       aov_out <- data.frame(aov_out[[1]])
+#    
+#       med_cor1 <- median(GO_cor1$value)
+#       med_cor2 <- median(GO_cor2$value)
+# 
+#       Diff_Complexes[count,1] <- comps$ComplexName[i]
+#       Diff_Complexes[count,2] <- aov_out[1,5]
+#       Diff_Complexes[count,3] <- median(GO_cor1$value)
+#       Diff_Complexes[count,4] <- median(GO_cor2$value)
+#       Diff_Complexes[count,5] <- nrow(GO_cor1)
+#       
+#       
+#       
+#     }
+#   }
+# }
+# 
+# Diff_Complexes$qVal <- p.adjust(Diff_Complexes$pVal, method = 'BH')
+# Diff_Complexes$diff <- Diff_Complexes$cos_dist_mel-Diff_Complexes$cos_dist_mon
+# Diff_Complexes <- Diff_Complexes %>% filter(qVal < .1)
+# 
+# 
+# # Manually select Complexes to Plot and make plot 
+# Dif_comp_list <- c('BRD4-RFC complex',"MIB complex")
+# Dif_comp_plot <- data.frame(Type = character(), Condition = character(),value = numeric(), stringsAsFactors = FALSE)
+# 
+# for (X in Dif_comp_list){
+#   
+#   comp_list <- unlist(str_split(comps$subunits.UniProt.IDs.[comps$ComplexName == X],';'))
+#   GO_mat1 <- t7_Melanomas %>% filter(rownames(t7_Melanomas) %in% comp_list)
+#   GO_mat2 <- t7_Monocytes %>% filter(rownames(t7_Monocytes) %in% comp_list)
+#   GO_mat1 <- as.matrix(GO_mat1)
+#   GO_mat2 <- as.matrix(GO_mat2)
+#   GO_cor1 <- Distance_cosine(GO_mat1,10)
+#   GO_cor2 <- Distance_cosine(GO_mat2,10)
+#   GO_cor1$Condition <- X
+#   GO_cor2$Condition <- X
+#   GO_cor1$Type <- 'Melanoma'
+#   GO_cor2$Type <- 'Monocyte'
+#   GO_cor1 <- GO_cor1 %>% dplyr::select(Type,Condition,value)
+#   GO_cor2 <- GO_cor2 %>% dplyr::select(Type,Condition,value)
+#   Dif_comp_plot <- rbind(Dif_comp_plot,GO_cor1,GO_cor2)
+#   
+# }
+# 
+# 
+# ggplot(Dif_comp_plot, aes(x = Condition, y = value, color = Type)) +
+#   geom_beeswarm(cex = 5) + scale_color_manual(values = c( "#0000FF","#FF0000")) +
+#   #facet_wrap(~Condition,scales = 'free_x') + theme_bw() + 
+#   theme(axis.text.x=element_blank()) + xlab('Complex')+ylab('Cosine Distance')
+# 
+# 
+# Mon_comp_plot2 <- Mon_comp_plot
+# Mon_comp_plot2$celltype <- 'Monocyte'
+# Mel_comp_plot2 <- Mel_comp_plot
+# Mel_comp_plot2$celltype <- 'Melanoma'
+# dim(Mel_comp_plot2)
+# comp_all <- rbind(Mon_comp_plot2,Mel_comp_plot2)
+
+
+```
+
+```{r Plotting}
+s <- (bp_m + (sp4 | sp3  | sp2 | sp1)/(bp1 | bp2 | bp3 | bp4)) + plot_layout(ncol=2,widths = c(1,2))
+s
+#ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/figs/SubPop/SubPOP.png',plot = s,height = unit(6, "cm"),width = unit(20, "cm"))
+
+#ggsave('/Users/andrewleduc/Desktop/test_fig3_2.png',plot =(comp_mon | comp_mel),height = unit(5, "cm"),width = unit(20, "cm"))
+```
+
+
+
