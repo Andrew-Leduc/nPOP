@@ -44,9 +44,10 @@ k.t<-3
 
 
 
+
 #BiocManager::install('flowCore')
 # Check for presence of required packages for the import script
-req.pkg<-c("plyr","limma", "gridExtra", "stringr", "ggpubr", "Rcpp", "reshape2","psych",
+req.pkg<-c("plyr","limma","gtools",'Hmisc', "gridExtra", "stringr", "ggpubr", "Rcpp", "reshape2","psych",
            "ggplot2", "gridExtra", "gridGraphics", "grid", "ggridges",
            "matrixStats","patchwork","ggbeeswarm", "scales","stylo", "readr", "tidyverse","rlang","vctrs","tibble","dplyr","dbplyr")
 
@@ -71,6 +72,7 @@ if(any(!req.pkg%in%present.pkg)){
 
 ### load libraries and functions
 library(readr)
+library(gtools)
 library(reshape2)
 library(scales)
 library(ggplot2)
@@ -90,6 +92,7 @@ library(psych)
 library(ComplexHeatmap)
 library(circlize)
 library(limma)
+library(Hmisc)
 #library("genefilter")
 #library(flowCore)
 
@@ -99,7 +102,7 @@ library(ggbeeswarm)
 # py_install('matplotlib')
 # py_install('numba')
 # py_install('scipy')
-source_python('func.py')
+source_python('/Users/andrewleduc/Desktop/nPOP_Paper/code/func.py')
 
 
 
@@ -710,7 +713,7 @@ Distance_cor <- function(prepp, obsThreshold){
   obser.m$Var1Var2 <- paste(obser.m$Var1, " ", obser.m$Var2)
   
   # obtain the correlation matrix 
-  ppCor <- cor(t(prepp), method = "spearman", use = "pairwise.complete.obs")
+  ppCor <- Hmisc::rcorr(t(prepp), type = "spearman")$r
   # obtain the upper trianlge of the correlation matrix
   ppCor1 <- ppCor
   ppCor1[lower.tri(ppCor1, diag = T)] <- 188
@@ -830,7 +833,6 @@ Distance_dot <- function(prepp, obsThreshold){
   
   return(ppCor1.m.fil)
 }
-
 Distance_euclid_py <- function(prepp, obsThreshold){
   
   # count the number of shared observations between protein (i.e how many single cells have both proteins quantified)
@@ -864,7 +866,70 @@ Distance_euclid_py <- function(prepp, obsThreshold){
   
   return(ppCor1.m.fil)
 }
+Distance_propr_py <- function(prepp, obsThreshold){
+  
+  # count the number of shared observations between protein (i.e how many single cells have both proteins quantified)
+  obser <- pairwiseCount(t(prepp))
+  # obtain the upper triangle of shared observation matrix 
+  obser[lower.tri(obser, diag = T)] <- 188 
+  obser.m <- reshape2::melt(obser)
+  obser.m$Var1Var2 <- paste(obser.m$Var1, " ", obser.m$Var2)
+  
+  # obtain the cosine matrix 
+  mmat_p <- !is.na(prepp)
+  ppCor <- sparse_propr(prepp,mmat_p)
+  rownames(ppCor) <- rownames(prepp)
+  colnames(ppCor) <- rownames(prepp)
+  # obtain the upper trianlge of the correlation matrix
+  ppCor1 <- ppCor
+  ppCor1[lower.tri(ppCor1, diag = T)] <- 188
+  ppCor1.m <- reshape2::melt(ppCor1)
+  ppCor1.m$Var1Var2 <- paste(ppCor1.m$Var1, " ",  ppCor1.m$Var2)
+  
+  # merge the two matrices together 
+  ppCor1.m$obser <- obser.m$value[match(ppCor1.m$Var1Var2, obser.m$Var1Var2)]
+  # filter for the number of minimum shared observations, and for the upper triangle 
+  ppCor1.m.fil <- ppCor1.m %>% dplyr::filter(obser > obsThreshold & value != 188)
+  
+  ggplot(data = ppCor1.m.fil, aes(x = value)) + geom_histogram(color = "black", fill = "grey") +
+    geom_vline(xintercept = 0) + 
+    theme_classic() + 
+    labs(title = "Correlations with at least x observations", 
+         subtitle = "filtered for upper triangle")
+  
+  return(ppCor1.m.fil)
+}
 
+Distance_cor_sig <- function(prepp, obsThreshold){
+  
+  # count the number of shared observations between protein (i.e how many single cells have both proteins quantified)
+  obser <- pairwiseCount(t(prepp))
+  # obtain the upper triangle of shared observation matrix 
+  obser[lower.tri(obser, diag = T)] <- 188 
+  obser.m <- reshape2::melt(obser)
+  obser.m$Var1Var2 <- paste(obser.m$Var1, " ", obser.m$Var2)
+  
+  # obtain the correlation matrix 
+  ppCor <- cor(t(prepp), method = "spearman", use = "pairwise.complete.obs")
+  # obtain the upper trianlge of the correlation matrix
+  ppCor1 <- ppCor
+  ppCor1[lower.tri(ppCor1, diag = T)] <- 188
+  ppCor1.m <- reshape2::melt(ppCor1)
+  ppCor1.m$Var1Var2 <- paste(ppCor1.m$Var1, " ",  ppCor1.m$Var2)
+  
+  # merge the two matrices together 
+  ppCor1.m$obser <- obser.m$value[match(ppCor1.m$Var1Var2, obser.m$Var1Var2)]
+  # filter for the number of minimum shared observations, and for the upper triangle 
+  ppCor1.m.fil <- ppCor1.m %>% dplyr::filter(obser > obsThreshold & value != 188)
+  
+  ggplot(data = ppCor1.m.fil, aes(x = value)) + geom_histogram(color = "black", fill = "grey") +
+    geom_vline(xintercept = 0) + 
+    theme_classic() + 
+    labs(title = "Correlations with at least x observations", 
+         subtitle = "filtered for upper triangle")
+  
+  return(ppCor1.m.fil)
+}
 
 ########################################################################################################################
 ########################################################################################################################
@@ -907,7 +972,7 @@ Population_GSEA <- function(data,GO_db,sn){
     dataProt_matches_medInt <- data_matches %>% dplyr::group_by(Condition)  %>% dplyr::summarize(medianInt = median(Intensity,na.rm = T))
     dataProt_matches_medInt$GO_term <- GO_term
     
-    # Kruskall Wallis
+    
     #make sure majority of samples have observations present
     check <- T
     for (j in 1:length(pops)){
@@ -961,28 +1026,36 @@ Population_GSEA_norm <- function(data,GO_db,sn){
     
     # Kruskall Wallis
     #make sure majority of samples have observations present
-  
-    if(matches_number > 1 && length(unique(data_matches$Condition)) > 2 ){
+    
+    if(matches_number > 2 && length(unique(data_matches$Condition)) > 2 ){
       
       AOV_out <- aov(Intensity ~ Condition, data = data_matches)
       AOV_out <- summary(AOV_out)
       AOV_out <- data.frame(AOV_out[[1]])
       pVal <-AOV_out[1,5]
+      GSEA_output[i,1] <- GO_term
+      GSEA_output[i,2] <- pVal 
+      GSEA_output[i,3] <- matches_number
+      GSEA_output[i,4] <- fractionObserved
+      GSEA_output[i,5]<- dataProt_matches_medInt$medianInt[dataProt_matches_medInt$Condition == 'G1']
+      GSEA_output[i,6]<- dataProt_matches_medInt$medianInt[dataProt_matches_medInt$Condition == 'S']
+      GSEA_output[i,7]<- dataProt_matches_medInt$medianInt[dataProt_matches_medInt$Condition == 'G2']
     }
     else{
       pVal = NA
     }
-    GSEA_output[i,1] <- GO_term
-    GSEA_output[i,2] <- pVal 
-    GSEA_output[i,3] <- matches_number
-    GSEA_output[i,4] <- fractionObserved
-    GSEA_output[i,5]<- dataProt_matches_medInt$medianInt[1]
-    GSEA_output[i,6]<- dataProt_matches_medInt$medianInt[2]
-    GSEA_output[i,7]<- dataProt_matches_medInt$medianInt[3]
+    GSEA_output[i,1] <- NA
+    GSEA_output[i,2] <- NA 
+    GSEA_output[i,3] <- NA
+    GSEA_output[i,4] <- NA
+    GSEA_output[i,5]<- NA
+    GSEA_output[i,6]<- NA
+    GSEA_output[i,7]<- NA
     
   }
   return(GSEA_output)
 }
+
 
 
 #Messy other functions (Random)

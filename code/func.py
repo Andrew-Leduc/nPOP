@@ -11,8 +11,29 @@ import numba as nb
 from numba import prange
 import scipy.spatial.distance as sc
 
+#Proportionality
+@nb.njit
+def propr(vec1, vec2, mask1, mask2):
+    mask = mask1 & mask2
+    if np.sum(mask) > 3:
+        vec1_ma = vec1[mask]
+        vec2_ma = vec2[mask]
+        num = np.var(np.subtract(vec1_ma,vec2_ma))
+        den = np.var(vec1_ma) + np.var(vec2_ma)
+        prop = 1- num/den
+        return prop
+    return 0
 
-  
+@nb.njit(parallel = True)
+def sparse_propr(matrix, mask):
+    assert matrix.shape == mask.shape
+    dim1, dim2 = matrix.shape
+    result = np.zeros((dim1,dim1))
+    for i in prange(dim1):
+        for j in prange(dim1):
+            result[i,j] = propr(matrix[i],matrix[j],mask[i],mask[j])
+    return result
+
 
 
 

@@ -3,11 +3,11 @@ title: "nPOP Analysis"
 output: html_notebook
 ---
 
-
+Loading functions and raw data
 ```{r Load Functions and data}
 
 source("functions_parameters.R")
-ev <- read.delim("../dat/raw_data/Dart_ID_output/ev_updated.txt")
+ev <- read.delim("../dat/raw_data/ev_updated.txt")
 design<-read.csv("../dat/raw_data/annotation.csv")
 batch<-read.csv("../dat/raw_data/batch.csv")
 
@@ -20,6 +20,7 @@ convert$Gene.names2 <- gsub(' .*','',convert$Gene.names)
 
 ```
 
+Filtering and data triming, using agreement between peptides mapping to same protein
 ```{r Single Cell Data Filtering} 
 
 
@@ -146,7 +147,7 @@ for(X in unique(ev$Raw.file)){
   
 }
 
-c2q<-data.frame(ct.v, qt.v, rt.v); colnames(c2q)<-c("celltype","channel","rawfile")
+c2q<-data.frame(ct.v, qt.v, rt.v); colnames(c2q)<-c("id","channel","rawfile")
 c2q$id <- as.character(c2q$id)
 c2q$channel <- gsub(".*\\.","",c2q$channel)
 
@@ -261,14 +262,14 @@ my_col3<-c( "black", "purple2")
 # Plot!
 CV_plot <- ggplot(data=xdf, aes(x=cvm,fill=control)) + geom_density(aes( alpha=0.5), adjust=4) + theme_pubr() +
   scale_fill_manual(values=my_col3[c(1,2)]) + 
-  xlab("Quantification variability") + ylab("Density") + rremove("y.ticks") + rremove("y.text") +
+  xlab("Quantification variability") + ylab("Fraction of cells") + rremove("y.ticks") + rremove("y.text") +
   font("xylab", size=30) +
   font("x.text", size=20) +
   coord_cartesian(xlim=c(.15,.73))+
   #xlim(c(-0.15, 0.35)) +
   # annotate("text", x=0.27, y= 14, label=paste0(scrate,"% single cells passed"), size=8, color=my_col3[c(2)])+
   # annotate("text", x=0.27, y= 12.5, label=paste0(sc0rate,"% control wells passed"), size=8, color=my_col3[c(1)])+
-  annotate("text", x=0.26, y= 14, label=paste0(length(sc_kept)," cells"), size=10, color=my_col3[c(2)])+
+  annotate("text", x=0.26, y= 14, label=paste0("1,556 cells"), size=10, color=my_col3[c(2)])+
   annotate("text", x=0.64, y= 12, label=paste0(length(sc0_kept)," Ctr -"), size=10, color=my_col3[c(1)])+
   annotate("text", x=0.63, y= 14, label=paste0(length(sc_total) -length(sc_kept)," cells"), size=10, color=my_col3[c(2)])+
   annotate("text", x=0.245, y= 12, label=paste0(length(sc0_total) - length(sc0_kept)," Ctr -"), size=10, color=my_col3[c(1)])+
@@ -276,8 +277,11 @@ CV_plot <- ggplot(data=xdf, aes(x=cvm,fill=control)) + geom_density(aes( alpha=0
   rremove("legend") + geom_vline(xintercept=0.42, lty=2, size=2, color="gray50") + theme(plot.margin = margin(0, 1, 0, 0, "cm"))
 CV_plot 
 
+
+
 ```
 
+Now that we have peptide x single cells, data processing as per (Specht et al, 2021)
 ```{r Single Cell Data Processing}
 
 
@@ -363,12 +367,12 @@ matrix.sc.batch <- removeBatchEffect(sc.imp, batch=factor(batch.covs), batch2=fa
 
 
 
-#matrix.sc.batch <- ComBat(sc.imp, batch=batch.covs1)
+#matrix.sc.batch <- ComBat(sc.imp, batch=batch.covs)
 #Correct Label Bias
 #matrix.sc.batch2 <- ComBat(matrix.sc.batch, batch=batch.covs2)
 
 t6<- cr_norm_log(matrix.sc.batch)
-write.csv(t6,"../dat/Proccessed_data/t6.csv",row.names = T)
+#write.csv(t6,"../dat/Proccessed_data/t6.csv",row.names = T)
 
 #Remove imputed values from data
 t7 <- t6
@@ -438,6 +442,8 @@ main_pca <- ggscatter(pca.display, color = 'celltype' ,x =PCx, y = PCy, size = 5
   scale_y_continuous(breaks = scales::pretty_breaks(n = 3))
 main_pca 
 
+
+
 #Save IDs for Monocytes and Melanoma Cells 
 #Monocytes <- pca.display %>% dplyr::filter(celltype == 'u')
 #Monocytes <- Monocytes %>% filter(PC1 < -.015)
@@ -455,9 +461,16 @@ main_pca
 
 ```
 
+Here we plot number of peptides and proteins per SC
 ```{r Quality Control Analysis Batch effects and Negative Controls}
 # number prot 998, num pep 2657
 #Plot number of proteins and Peptides per single cell
+t4b <- read.csv('/Users/andrewleduc/Desktop/nPOP_Paper/dat/Proccessed_data/t4b.csv',row.names = 1)
+t3 <- read.csv('/Users/andrewleduc/Desktop/nPOP_Paper/dat/Proccessed_data/t3.csv',row.names = 1)
+t3 <- as.matrix(t3)
+t4b <- as.matrix(t4b)
+t4b <- t4b[,intersect(colnames(t4b),mel$id)]
+ncol(t4b)
 t4b_count <- filt.mat.cr(t4b,.99,.8)
 count_proteins <- c()
 for(i in 1:ncol(t4b_count)){
@@ -470,15 +483,15 @@ for(i in 1:ncol(t3_count)){
 }
 
 Counts_mat_prot <- as.data.frame(count_proteins)
-Counts_mat_prot$Data <- 'Protein'
+Counts_mat_prot$Data <- 'Proteins'
 colnames(Counts_mat_prot)[1] <- 'Count'
 Counts_mat_pep <- as.data.frame(count_peptides)
-Counts_mat_pep$Data <- 'Peptide'
+Counts_mat_pep$Data <- 'Peptides'
 colnames(Counts_mat_pep)[1] <- 'Count'
 Count_mat <- rbind(Counts_mat_prot,Counts_mat_pep)
 
 prot_pep_pc <- ggplot(Count_mat,aes(x = Count,fill = Data)) + geom_histogram(position = "identity",alpha=.7) +
-  xlab('# IDs per single sell') + ylab('# single cell') + theme_classic() + 
+  xlab('# IDs per single cell') + ylab('# single cells') + theme_classic() + 
   scale_fill_manual(values = c( "#330000","#2BD9D9")) + coord_cartesian(xlim = c(0,4000))+
   scale_x_continuous(breaks = scales::pretty_breaks(n = 5)) +
   scale_y_continuous(breaks = scales::pretty_breaks(n = 3)) +
@@ -497,60 +510,6 @@ prot_pep_pc <- ggplot(Count_mat,aes(x = Count,fill = Data)) + geom_histogram(pos
 
 # This is a bit lazy but to make this plot, I just re-ran all the earlier lines of code but without
 # including the reference normalization so the relevant raw intensities could be plotted
-
-
-
-# ev <- read.delim("/Users/andrewleduc/Desktop/nPOP_CC/Final_Search/ev_updated.txt")
-# design<-read.csv("/Users/andrewleduc/Desktop/sc_pipeline-master/annotation_18plex.csv")
-# batch<-read.csv("/Users/andrewleduc/Desktop/sc_pipeline-master/nPOP_batch.csv")
-# ev[,colnames(batch)[-1]]<-NA
-# for(X in batch$set){
-#   
-#   ev$lcbatch[ev$Raw.file==X] <- as.character(batch$lcbatch[batch$set%in%X])
-#   ev$sortday[ev$Raw.file==X] <- as.character(batch$sortday[batch$set%in%X])
-#   ev$digest[ev$Raw.file==X] <- as.character(batch$digest[batch$set%in%X])
-#   
-# }
-# 
-# 
-# # Create unique peptide+charge column:
-# ev$modseq<-paste0(ev$Modified.sequence,ev$Charge)
-# 
-# # Add X in front of experiment names because R doesn't like column names starting with numbers
-# ev$Raw.file<-paste0("X",ev$Raw.file)
-# design$Set<-paste0("X",design$Set)
-# 
-# 
-# # Which columns hold the TMT Reporter ion (RI) data
-# ri.index<-which(colnames(ev)%in%paste0("Reporter.intensity.",1:18))
-# 
-# 
-# # Make sure all runs are described in design, if not, print and remove them:
-# not.described<-unique(ev$Raw.file)[ !unique(ev$Raw.file) %in% paste0(design$Set) ]
-# ev<-ev[!ev$Raw.file%in%not.described,]
-# 
-# #PSM Filtering
-# ev<-ev %>% filter(Reverse != '+')
-# if(length(grep("REV", ev$Leading.razor.protein))>0){ ev<-ev[-grep("REV", ev$Leading.razor.protein),] }
-# if(length(grep("CON", ev$Proteins))>0){ ev<-ev[-grep("CON", ev$Proteins),] }
-# if(length(which(ev$Potential.contaminant=="+"))>0){ ev<-ev[-which(ev$Potential.contaminant=="+"),] }
-# ev <- ev %>% filter(PIF >.6 | is.na(PIF)==T)
-# ev$PIF[is.na(ev$PIF)==T] <- .6
-# sum(is.na(ev$PIF)==T)
-# 
-# ev <- ev %>% filter(Reporter.intensity.corrected.1 != 0)
-# ev<-ev[ev$dart_qval < 0.01,]
-# 
-# # Remove peptides that are more the 5% the intensity of the carrier in the single cell runs (only)
-# ev<-as.data.frame(ev)
-# ev$mrri<-0
-# ev$mrri <- rowMeans(ev[, ri.index[5:length(ri.index)]] / ev[, ri.index[1]], na.rm = T)
-# ev <-ev %>% filter(mrri < .05)
-# 
-# 
-# ev$SC_sum <- rowSums(ev[, ri.index[5:length(ri.index)]])
-# ev <-ev %>% filter(SC_sum != 0)
-
 
 
 ev <- ev_raw_intense_plot
@@ -641,90 +600,32 @@ ev.matrix[ev.matrix==-Inf]<-NA
 sum(ev.matrix==0,na.rm = T)
 
 neg <- ev.melt.uniqueID_lim %>% filter(celltype == 'neg')
-all <- c(neg$id,colnames(t7))
+mel <- ev.melt.uniqueID_lim %>% filter(celltype == 'm')
+mon <- ev.melt.uniqueID_lim %>% filter(celltype == 'u')
+mel <- intersect(colnames(t4b),mel$id)
+mon <- intersect(colnames(t4b),mon$id)
 
 # Divide matrix into single cells (including intentional blanks) and carriers
+ev.matrix <- ev.matrix_hold
+#ev.matrix[ev.matrix==0]<- NA
+ev.matrix.sc.u<-ev.matrix[, colnames(ev.matrix)%in%mon]
+ev.matrix.sc.m<-ev.matrix[, colnames(ev.matrix)%in%mel]
+ev.matrix.neg<- ev.matrix[, colnames(ev.matrix)%in%neg$id]
 
-ev.matrix.sc<-ev.matrix[, colnames(ev.matrix)%in%all]
-ncol(ev.matrix.sc)
-
-#ev.matrix.sc.f<-ev.matrix.sc[,colnames(ev.matrix.sc)%in%sc_kept]; dim(ev.matrix.sc.f)
-ev.matrix.sc.f[ev.matrix.sc.f==Inf]<-NA
-ev.matrix.sc.f[ev.matrix.sc.f==-Inf]<-NA
-ev.matrix.sc.f[ev.matrix.sc.f==0]<-NA
-
-# Original data, normalized to reference channel, filtered for failed wells:
-#t0<-ev.matrix.sc.f
-
-# Column then row normalize by median or mean (see source functions):
-#t1<-cr_norm(t0)
-
-# Filter for missing data:
-#t2<-filt.mat.rc(t1, .99, .85)
-
-ev.matrix_neg_v_sc <- melt(as.data.frame(ev.matrix))
+neg_miss <- (colSums(ev.matrix.neg==0,na.rm=T)/colSums(is.na(ev.matrix.neg)==F))
+missingDF <- as.data.frame(neg_miss)
+missingDF$cond <- 'neg'
+colnames(scDF.m)[1] <- 'fract.miss'
 
 
-negs <- ev.melt.uniqueID %>% filter(celltype == 'neg')
-Cells <- ev.melt.uniqueID %>% filter(id %in% colnames(t2))
-Cells_mon <- Cells %>% filter(celltype == 'm')
-Cells_mel <- Cells %>% filter(celltype == 'u')
+sc_miss.m <- (colSums(ev.matrix.sc.m==0,na.rm=T)/colSums(is.na(ev.matrix.sc.m)==F))
+scDF.m<- as.data.frame(sc_miss.m)
+scDF.u$cond <- 'mon'
+df_all <- rbind(missingDF,scDF.u,scDF.m)
 
-ev.matrix_neg_v_sc <- ev.matrix_neg_v_sc %>% filter(variable %in% c(negs$id,Cells_mon$id,Cells_mel$id))
+ggplot(df_all,aes(x =fract.miss,fill = cond )) + geom_histogram(position = 'identity',alpha = .3)
+ggplot(df_all,aes(x =fract.miss,fill = cond )) + geom_density(alpha = .3)+theme_classic()
 
-ev.matrix_neg_v_sc$celltype <- NA
-ev.matrix_neg_v_sc$celltype[ev.matrix_neg_v_sc$variable %in% negs$id] <- 'Ctr -'
-ev.matrix_neg_v_sc$celltype[ev.matrix_neg_v_sc$variable %in% Cells_mel$id] <- 'Melanoma'
-ev.matrix_neg_v_sc$celltype[ev.matrix_neg_v_sc$variable %in% Cells_mon$id] <- 'Monocyte'
-
-ev.matrix_neg_v_sc <- ev.matrix_neg_v_sc %>% filter(is.na(value)==F)
-ev.matrix_neg_v_sc$value[ev.matrix_neg_v_sc$value == 0] <- 1
-ev.matrix_neg_v_sc$value <- log10(ev.matrix_neg_v_sc$value)
-#ev.matrix_neg_v_sc$value[is.na(ev.matrix_neg_v_sc$value) == T] <- -8
-
-
-g <- ggplot(ev.matrix_neg_v_sc,aes(x = value,fill = celltype)) + geom_density(bw = .1,kernel = "rectangular",position = "identity",alpha=.5) + theme_classic() + 
-  xlab('Log2(Intensity)') + coord_cartesian(xlim = c(-.1,6)) #+ geom_vline(xintercept = -2)
-
-
-ev.matrix_neg_v_sc_meds <- ev.matrix_neg_v_sc %>%
-  group_by(celltype) %>%
-  summarize(median=median(value,na.rm = T))
-
-g+geom_vline(data = ev.matrix_neg_v_sc_meds, aes(xintercept = median, 
-                                       color = celltype), size=1.5)
-
-ev.matrix_neg_v_sc_matlab <- ev.matrix_neg_v_sc
-ev.matrix_neg_v_sc_matlab[is.na(ev.matrix_neg_v_sc_matlab)==T] <- NaN
-ev.matrix_neg_v_sc_matlab$variable <- NULL
-unique(ev.matrix_neg_v_sc_matlab$celltype)
-neg_plot_sig <- ev.matrix_neg_v_sc_matlab %>% filter(celltype == 'Ctr -')
-mon_plot_sig <- ev.matrix_neg_v_sc_matlab %>% filter(celltype == 'Monocyte')
-mel_plot_sig <- ev.matrix_neg_v_sc_matlab %>% filter(celltype == 'Melanoma')
-
-length(mon_plot_sig$value) <length(mel_plot_sig$value)
-
-plot_matlab <- matrix(data = NaN,nrow = nrow(mel_plot_sig),ncol = 3)
-plot_matlab[,1] <- mel_plot_sig$value
-plot_matlab[1:nrow(mon_plot_sig),2] <- mon_plot_sig$value
-plot_matlab[1:nrow(neg_plot_sig),3] <- neg_plot_sig$value
-
-
-write.table(plot_matlab,file = '../dat/Output_tables/Neg_ctrl_vs_SC_Signal_data.txt', sep = '\t',row.names = F,col.names = F)
-
-
-## save plots 
-# ggsave("/Users/andrewleduc/Desktop/nPOP_Paper/figs/SC_QC/pca_main.png",plot = main_pca,width = unit(6, "cm"),height =  unit(5, "cm"))
-# ggsave("/Users/andrewleduc/Desktop/nPOP_Paper/figs/SC_QC/pca_batch.png",plot =batch_pca,width = unit(6, "cm"),height = unit(5, "cm"))
-# ggsave("/Users/andrewleduc/Desktop/nPOP_Paper/figs/SC_QC/pca_label.png",plot =label_pca,width = unit(6, "cm"),height = unit(5, "cm"))
-# ggsave("/Users/andrewleduc/Desktop/nPOP_Paper/figs/SC_QC/pppc.png",plot =prot_pep_pc,width = unit(6, "cm"),height = unit(5, "cm"))
-# ggsave("/Users/andrewleduc/Desktop/nPOP_Paper/figs/SC_QC/cv.png",plot =CV_plot,width = unit(6, "cm"),height = unit(5, "cm"))
-
-
-#SC_QC <- (CV_plot|CV_plot|prot_pep_pc)/(main_pca|label_pca|batch_pca)
-#SC_QC <- (prot_pep_pc|prot_pep_pc)/(CV_plot|pca_main)
-
-#ggsave("../figs/SC_QC/QC_ALL.png",plot =SC_QC,width = unit(14, "cm"),height = unit(11, "cm"))
 
 ```
 
@@ -984,28 +885,31 @@ pca.display_ <- pca.display %>% filter(type_col == 'Monocyte')
 pca.display_ <- pca.display_ %>% filter(PC1 > -.005)
 pca.display <- pca.display %>% filter(!id %in% pca.display_$id)
 
-pca_main <- ggscatter(pca.display, color = 'type_col',shape = 'type_sh' ,x =PCx, y = PCy, size = 'type_sh' , alpha='type_sh') +
-  xlab(paste0(PCx,"  (", round(percent_var[1],0),"%)")) +
-  ylab(paste0(PCy,"  (", round(percent_var[2],0),"%)")) +
-  font("ylab",size=30) +
-  font("xlab",size=30) +
-  rremove('legend')+
-  font("xy.text", size=20)+ scale_color_manual(values = c("#F6BE00","#007A39"))+ scale_shape_manual(values = c(8, 19))+
-  scale_size_manual(values = c(10, 5)) +scale_alpha_manual(values = c(1,.5))+ 
-  #scale_color_manual(values = my_colors[2:3]) +
-  #annotate("text", x=-0.025, y=0.21,label="Macrophage", color=my_colors[2], size=10)  +
-  #annotate("text", x=0.03, y=0.21, label="Monocyte", color=my_colors[3], size=10) +
-  annotate("text", x=.0055, y=0.025, label=paste0("2844 proteins"), size=8) +
-  annotate("text", x=.006, y=0.04, label=paste0("1543 single cells"), size=8) +
-  scale_x_continuous(breaks = scales::pretty_breaks(n = 4)) +
-  scale_y_continuous(breaks = scales::pretty_breaks(n = 3))
+pca_main <- pca.display %>% ggplot(aes(x = PC1, y = PC2, color = type_col, shape = type_sh, size = type_sh,alpha = type_sh))  + 
+        geom_point(stroke = 2) + scale_size_discrete(range = c(12,3)) +    
+        scale_shape_manual(values = c(23,16)) +   
+  geom_point(data = subset(pca.display, type_sh == 'Bulk'),aes(x =   
+           PC1, y = PC2),size = 11, color = "black", shape = 23,stroke = 2) +   
+  geom_point(data = subset(pca.display, type_sh == 'Bulk'),aes(x = 
+           PC1, y = PC2),size = 13, color = "black", shape = 23,stroke = 2)+
+  geom_point(data = subset(pca.display, type_sh == 'Bulk'),aes(x = 
+           PC1, y = PC2, color = type_col), shape = 23,stroke = 2) +   
+  theme_classic() + scale_alpha_discrete(range = c(.8,.4)) +
+  theme(axis.title = element_text(size = 24), axis.text = element_text(size = 22))+
+  scale_color_manual(values = c("#F6BE00","#007A39")) + guides(color = "none",fill = "none", size = "none",alpha = "none") + labs(shape = 
+        "",x="PC1",y = "PC2") + rremove('legend') + 
+  annotate("text", x=.0055, y=-0.04, label=paste0("2844 proteins"), size=8) +
+  #annotate("text", x=.006, y=-0.025, label=paste0("1,543 single cells"), size=8) +
+  xlim(c(-.035,.035)) + xlab('PC1 (62%)') + ylab('PC2 (3%)')
 
-ggsave("/Users/andrewleduc/Desktop/nPOP_Paper/figs/SC_QC/pca_main.png",plot = pca_main,width = unit(6, "cm"),height =  unit(5.5, "cm"))
+
+ggsave("/Users/andrewleduc/Desktop/nPOP_Paper/figs/SC_QC/pca_main.png",plot = pca_main,width = unit(6, "cm"),height =  unit(5, "cm"))
 
 pca_main
 
 ```
 
+plotting cell size vs raw intensity
 ```{r Cell size}
 #install.packages('yaImpute')
 library('yaImpute')
@@ -1102,7 +1006,7 @@ label <- transform(label, xyf = paste0(xPos, yPos, field))
 ### Isolation and Label merged
 
 isoLab <- allDays %>% group_by(Target) %>% left_join(label, by = 'xyf')
-labelCount <- isoLab %>% group_by(well) %>% summarize(count=n())
+labelCount <- isoLab %>% group_by(well) %>% dplyr::summarize(count=n())
 
 ## trying to get pickup working in the same way
 # fixing pickup file
@@ -1157,7 +1061,7 @@ isoLab_bound <- transform(isoLab_bound, xyft = paste0(pickupX, pickupY, Field, T
 pickup <- transform(pickup, xyft = paste0(xPos, yPos, field, target))
 
 isoLab_final <- isoLab_bound %>% left_join(pickup, by = 'xyft')
-wellCount <- isoLab_final %>% group_by(well.y) %>% summarize(count=n())
+wellCount <- isoLab_final %>% group_by(well.y) %>% dplyr::summarize(count=n())
 
 ### Clean up to yield final dataframe
 cellenOne_data <- data.frame (sample = isoLab_final$condition, isoTime = isoLab_final$Time, diameter = isoLab_final$Diameter, elongation = isoLab_final$Elongation, slide = isoLab_final$Target, field = isoLab_final$Field, dropXPos = isoLab_final$XPos, dropYPos = isoLab_final$YPos, label = isoLab_final$well.x, pickupXPos = isoLab_final$pickupX, pickupYPos = isoLab_final$pickupY, injectWell = isoLab_final$well.y)
@@ -1169,7 +1073,7 @@ cellenOne_data$wellNum <- substring(cellenOne_data$injectWell, 2)
 
 cellenOne_data <- cellenOne_data %>% arrange(wellAlph, as.numeric(wellNum), as.numeric(label))
 
-sortedWellCount <- cellenOne_data %>% group_by(injectWell) %>% summarize(count=n())
+sortedWellCount <- cellenOne_data %>% group_by(injectWell) %>% dplyr::summarize(count=n())
 
 #### ok. We tried one merge approach, lets try the other which is, direct to design file.
 
@@ -1194,7 +1098,7 @@ c2q$channel <- gsub(".*\\.","",c2q$channel)
 cellenOne_c2q <- inner_join(design_cellenOne, c2q, by = c("Set" = "rawfile", "label" = "channel"))
 
 
-t0 <- ev.matrix[,colnames(ev.matrix)%in% colnames(t7)]
+t0 <- ev.matrix[,colnames(ev.matrix)%in% colnames(t4b)]
 t0_mean_ri <- as.data.frame(colMeans(t0,na.rm=T))
 t0_mean_ri$celltype <- colnames(t0)
 colnames(t0_mean_ri)[1] <- 'Mean.Intensity'
@@ -1202,27 +1106,19 @@ colnames(t0_mean_ri)[1] <- 'Mean.Intensity'
 cellenOne_c2q <- inner_join(cellenOne_c2q,t0_mean_ri, by = 'celltype')
 
 cor(cellenOne_c2q$diameter,log2(cellenOne_c2q$Mean.Intensity),use = 'pairwise.complete.obs',method = c('pearson'))
-plot(cellenOne_c2q$diameter,log2(cellenOne_c2q$Mean.Intensity))
 
-two <-ggplot(cellenOne_c2q,aes(y = log10(Mean.Intensity),x = diameter,color = sample.x)) + geom_point() +
-  theme_classic() + coord_cartesian(ylim = c(2,4))
+two <-ggplot(cellenOne_c2q,aes(y = log10(Mean.Intensity),x = diameter,color = sample.x)) + geom_point(alpha = .4) +
+  theme_classic() + coord_cartesian(ylim = c(2,4))+ xlab('') + ylab('')+
+  theme(axis.title.x = element_text(size = 30),axis.title.y = element_text(size = 26),
+        axis.text.x = element_text(size = 20),axis.text.y = element_text(size = 20))+ scale_color_manual(values = c("#F6BE00","#007A39"))+ylab(expression(Log[10]~mean~RI~signal))
 
-cor(cellenOne_c2q$diameter,(cellenOne_c2q$Mean.Intensity))
+#write.csv(cellenOne_c2q,"../dat/Proccessed_data/diam_mean.csv",row.names = T)
+
+ggsave("/Users/andrewleduc/Desktop/nPOP_Paper/figs/SC_QC/diamVmean.png",plot = two,width = unit(6, "cm"),height =  unit(5, "cm"))
 
 
-t0_blank <- ev.matrix.sc[,!colnames(ev.matrix.sc)%in% colnames(t7)]
-t0_mean_ri_blank <- as.data.frame(colMeans(t0_blank,na.rm=T))
-colnames(t0_mean_ri_blank) <- 'Neg'
-
-median(log10(t0_mean_ri_blank$Neg))
-median(log10(cellenOne_c2q$Mean.Intensity))
-
-t0_mean_ri_blank$cond <- 'Negative Control'
-one <- ggplot(t0_mean_ri_blank,aes(x = cond,y = log10(Neg)))+ggbeeswarm::geom_beeswarm() +
-  coord_cartesian(ylim = c(2,4)) + theme_classic()
-
-write.csv(t0_mean_ri_blank,"../dat/Proccessed_data/diam_mean.csv",row.names = T)
-write.csv(cellenOne_c2q,"../dat/Proccessed_data/neg.csv",row.names = T)
+#colnames(cellenOne_c2q)[17] <- 'id'
+#meta_ <- meta %>% left_join(cellenOne_c2q, by = 'id')
 
 
 

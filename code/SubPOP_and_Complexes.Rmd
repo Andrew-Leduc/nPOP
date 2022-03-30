@@ -6,7 +6,7 @@ output: html_notebook
 Loading data
 ```{r Load Data}
 
-source("functions_parameters.R")
+source("/Users/andrewleduc/Desktop/nPOP_Paper/code/functions_parameters.R")
 
 #t7_Monocytes <- read.csv('../dat/Proccessed_data/t7_Monocytes.csv',row.names = 1)
 #t7_Melanomas <- read.csv('../dat/Proccessed_data/t7_Melanomas.csv',row.names = 1)
@@ -27,10 +27,14 @@ comps <- comps %>% distinct(ComplexName, .keep_all = T)
 meta <- read.csv('../dat/Proccessed_data/meta.csv',row.names = 1)
 meta_mel <- meta %>% filter(celltype == 'm')
 meta_mon <- meta %>% filter(celltype == 'u')
+meta_mel_l <- meta %>% filter(sub =='C1')
+meta_mel_s <- meta %>% filter(sub =='C2')
 
 t7 <- read.csv('../dat/Proccessed_data/t7.csv',row.names = 1)
 t7_Monocytes <- t7 %>% dplyr::select(intersect(colnames(t7),meta_mon$id))
 t7_Melanomas <- t7 %>% dplyr::select(intersect(colnames(t7),meta_mel$id))
+t7_Melanomas_small <-t7 %>% dplyr::select(intersect(colnames(t7),meta_mel_s$id))
+t7_Melanomas_large <-t7 %>% dplyr::select(intersect(colnames(t7),meta_mel_l$id))
 
 
 ```
@@ -49,7 +53,7 @@ Drug_resist <- raj %>% dplyr::filter(log2FoldChange >1.5)
 Main_pop <- raj %>% dplyr::filter(log2FoldChange < 0)
 
 
-
+Drug_resist <- Drug_resist %>% filter(Entry %in% rownames(t7))
 #PCA
 
 mat.sc.imp <- as.matrix(t7_Melanomas)
@@ -307,10 +311,15 @@ bp4 <-ggscatter(pca.display, color = 'ccarr' ,x =PCx, y = PCy, size = 5, alpha=0
   scale_color_gradient2(midpoint = .0, low = "blue", mid = "white",
                           high = "red",name = '') + theme(plot.title = element_text(size = 20))
 
+##plot
+s <- (bp_m + (sp4 | sp3  | sp2 | sp1)/(bp1 | bp2 | bp3 | bp4)) + plot_layout(ncol=2,widths = c(1,2))
+s
+#ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/figs/SubPop/SubPOP.png',plot = s,height = unit(6, "cm"),width = unit(20, "cm"))
 
+#ggsave('/Users/andrewleduc/Desktop/test_fig3_2.png',plot =(comp_mon | comp_mel),height = unit(5, "cm"),width = unit(20, "cm"))
 ```
 
-In the next two sections, we look to suggest the presence of complexes in our single cell data by computing similarity (cosine distance normalized for # of pairwise data points in comparison of two vectors) between proteins from a compex, and compare it to the distrobution of all pairwise euclidean distances.
+In the next two sections, we look to suggest the presence of complexes in our single cell data by computing similarity (cosine distance normalized for # of pairwise data points in comparison of two vectors) between proteins from a complex, and compare it to the distribution of all pairwise euclidean distances.
 ```{r Protein Complex Analysis Monocyte}
 
 # Compute Null Distribution for all pairwise euclidean distances in melanoma 
@@ -477,105 +486,104 @@ comp_mel <- ggplot(Mel_comp_plot,aes(x = log10(value),y = Condition)) +
 comp_mel
 ```
 
-```{r Protein Complex Differential between celltypes}
-### Comparing Differential Complexes in Both Cell Lines
-# Diff_Complexes <- data.frame(Complex_name = character(), pVal = numeric(),cos_dist_mel = numeric(),cos_dist_mon = numeric(),number_prots = numeric(), stringsAsFactors = FALSE)
-# 
-# count <- 0
-# for (i in 1:nrow(comps)){
-#   #GO_term <- unique_GO_terms[i]
-#   #GO_db_lim <- GO_db %>% dplyr::filter(GO_term_name == GO_term)
-#   comp_list <- unlist(str_split(comps$subunits.UniProt.IDs.[i],';'))
-#   GO_mat1 <- t7_Melanomas %>% filter(rownames(t7_Melanomas) %in% comp_list)
-#   GO_mat2 <- t7_Monocytes %>% filter(rownames(t7_Monocytes) %in% comp_list)
-#   if (nrow(GO_mat1) > 3){
-#     GO_mat1 <- as.matrix(GO_mat1)
-#     GO_mat2 <- as.matrix(GO_mat2)
-#     GO_weight1 <- Mel_weights[rownames(Mel_weights)%in%rownames(GO_mat1),]
-#     GO_weight1 <- GO_weight1 - .6
-#     GO_weight2 <- Mon_weights[rownames(Mon_weights)%in%rownames(GO_mat2),]
-#     GO_weight2 <- GO_weight2 - .6
-#     GO_cor1 <- Distance_cosine_weighted(GO_mat1,GO_weight1,10)
-#     GO_cor2 <- Distance_cosine_weighted(GO_mat2,GO_weight2,10)
-#     
-#     if(nrow(GO_cor1) > 3 && nrow(GO_cor2) > 3){
-#       count <- count +1
-#       GO_cor1$Condition <- 'type1'
-#       GO_cor2$Condition <- 'type2'
-#       GO_cor1 <- GO_cor1 %>% dplyr::select(Condition,value)
-#       GO_cor2 <- GO_cor2 %>% dplyr::select(Condition,value)
-#       Null_plus_dat <- rbind(GO_cor1,GO_cor2)
-#       aov_out <- aov(value ~ Condition, data = Null_plus_dat)
-#       aov_out<- summary(aov_out)
-#       aov_out <- data.frame(aov_out[[1]])
-#    
-#       med_cor1 <- median(GO_cor1$value)
-#       med_cor2 <- median(GO_cor2$value)
-# 
-#       Diff_Complexes[count,1] <- comps$ComplexName[i]
-#       Diff_Complexes[count,2] <- aov_out[1,5]
-#       Diff_Complexes[count,3] <- median(GO_cor1$value)
-#       Diff_Complexes[count,4] <- median(GO_cor2$value)
-#       Diff_Complexes[count,5] <- nrow(GO_cor1)
-#       
-#       
-#       
-#     }
-#   }
-# }
-# 
-# Diff_Complexes$qVal <- p.adjust(Diff_Complexes$pVal, method = 'BH')
-# Diff_Complexes$diff <- Diff_Complexes$cos_dist_mel-Diff_Complexes$cos_dist_mon
-# Diff_Complexes <- Diff_Complexes %>% filter(qVal < .1)
-# 
-# 
-# # Manually select Complexes to Plot and make plot 
-# Dif_comp_list <- c('BRD4-RFC complex',"MIB complex")
-# Dif_comp_plot <- data.frame(Type = character(), Condition = character(),value = numeric(), stringsAsFactors = FALSE)
-# 
-# for (X in Dif_comp_list){
-#   
-#   comp_list <- unlist(str_split(comps$subunits.UniProt.IDs.[comps$ComplexName == X],';'))
-#   GO_mat1 <- t7_Melanomas %>% filter(rownames(t7_Melanomas) %in% comp_list)
-#   GO_mat2 <- t7_Monocytes %>% filter(rownames(t7_Monocytes) %in% comp_list)
-#   GO_mat1 <- as.matrix(GO_mat1)
-#   GO_mat2 <- as.matrix(GO_mat2)
-#   GO_cor1 <- Distance_cosine(GO_mat1,10)
-#   GO_cor2 <- Distance_cosine(GO_mat2,10)
-#   GO_cor1$Condition <- X
-#   GO_cor2$Condition <- X
-#   GO_cor1$Type <- 'Melanoma'
-#   GO_cor2$Type <- 'Monocyte'
-#   GO_cor1 <- GO_cor1 %>% dplyr::select(Type,Condition,value)
-#   GO_cor2 <- GO_cor2 %>% dplyr::select(Type,Condition,value)
-#   Dif_comp_plot <- rbind(Dif_comp_plot,GO_cor1,GO_cor2)
-#   
-# }
-# 
-# 
-# ggplot(Dif_comp_plot, aes(x = Condition, y = value, color = Type)) +
-#   geom_beeswarm(cex = 5) + scale_color_manual(values = c( "#0000FF","#FF0000")) +
-#   #facet_wrap(~Condition,scales = 'free_x') + theme_bw() + 
-#   theme(axis.text.x=element_blank()) + xlab('Complex')+ylab('Cosine Distance')
-# 
-# 
-# Mon_comp_plot2 <- Mon_comp_plot
-# Mon_comp_plot2$celltype <- 'Monocyte'
-# Mel_comp_plot2 <- Mel_comp_plot
-# Mel_comp_plot2$celltype <- 'Melanoma'
-# dim(Mel_comp_plot2)
-# comp_all <- rbind(Mon_comp_plot2,Mel_comp_plot2)
+
+Differential protein expression betweein Large and small subpopulations
+```{r Diff protein expression}
+
+pvals <- c()
+meds <- c()
+prot <- c()
+for (i in 1:nrow(t7_Melanomas_small)){
+  if(sum(is.na(t7_Melanomas_small[i,])==F) > 9){
+    pvals <- c(pvals,wilcox.test(as.matrix(t7_Melanomas_small[i,]), as.matrix(t7_Melanomas_large[i,]), alternative = "two.sided")$p.value)
+    prot <- c(prot,rownames(t7_Melanomas_small)[i])
+    meds <- c(meds, median(as.matrix(t7_Melanomas_small[i,]),na.rm = T)- median(as.matrix(t7_Melanomas_large[i,]),na.rm = T))
+    
+  }
+  
+}
+
+
+
+
+df <- as.data.frame(pvals)
+df$prot <- prot
+df$FC <- meds
+df$qval <- p.adjust(df$pvals,method = 'BH')
+df <- df %>% filter(qval < .01)
+df$Condition <- NA
+df$Condition[df$FC > 0] <- 'Cluster B'
+df$Condition[df$FC < 0] <- 'Cluster A'
+
+#write.csv(df,'../dat/Output_tables/diff_prot_subPOP.csv',row.names = T)
+
+prots <- c('Q9Y261','P68363','P58546','Q99986','P14927','P53801','P49755')
+genes <-c('FOXA2','TUBA1B','MTPN','VRK1','UQCRB','PTTG1IP','TMED10')
+
+prots <- c('P68363','Q99986','P53801','P63241')
+genes <-c('TUBA1B','VRK1','PTTG1IP','EIF5A')
+
+t7_Melanomas_Small_plot <- t7_Melanomas_Small %>% filter(rownames(t7_Melanomas_Small)%in% prots)
+t7_Melanomas_Small_plot <- t7_Melanomas_Small_plot[prots,]
+t7_Melanomas_Small_plot$genes <- genes
+t7_Melanomas_Small_plot <- melt(t7_Melanomas_Small_plot,id.vars = 'genes')
+t7_Melanomas_Small_plot$Condition <- 'C2'
+
+t7_Melanomas_Largel_plot <- t7_Melanomas_Large %>% filter(rownames(t7_Melanomas_Small)%in% prots)
+t7_Melanomas_Largel_plot <- t7_Melanomas_Largel_plot[prots,]
+t7_Melanomas_Largel_plot$genes <-genes
+t7_Melanomas_Largel_plot <- melt(t7_Melanomas_Largel_plot,id.vars = 'genes')
+t7_Melanomas_Largel_plot$Condition <- 'C1'
+
+
+mel_dif_plot <- rbind(t7_Melanomas_Largel_plot,t7_Melanomas_Small_plot)
+mel_dif_plot <- mel_dif_plot %>% filter(is.na(value)==F)
+
+
+diff_prot_exp <- ggplot(data=mel_dif_plot, aes(x=value, y=genes)) +
+  geom_density_ridges(aes(fill=Condition),alpha=.9, scale=1,stat = "binline", bins = 20) +
+  theme_pubr() +
+  scale_fill_manual(values=c('#DCDCDC','#808080')) +
+  scale_x_continuous(limits=c(-3,3)) +
+  coord_flip() +
+  xlab("Protein level, log2") +
+  ylab("Gene ontology") +
+  rremove("y.ticks") +
+  #rremove("x.text") +
+  rremove("xlab") +
+  font("ylab", size=30) +
+  font("xy.text", size=30) +
+  rremove("legend") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+mel_dif_plot_FOX_MTPN <- mel_dif_plot %>% filter(genes %in% c('MTPN','FOXA2'))
+mel_dif_plot_FOX_MTPN <- dcast(mel_dif_plot_FOX_MTPN,Condition+variable~genes,value.var ='value' ,fill = NA)
+
+p2 <- ggplot(mel_dif_plot_FOX_MTPN,aes(x = MTPN,y =FOXA2 ,color = Condition,shape = Condition,size = 15)) + 
+  geom_point() + theme_classic() +scale_color_manual(values=c('#dcdcdc','#2C2C2C')) + rremove('legend')+ 
+  coord_cartesian(xlim = c(-2,2))+theme(axis.title = element_text(size = 24), axis.text = element_text(size = 22))
+
+mel_dif_plot_FOX_MTPN_ <- mel_dif_plot %>% filter(genes %in% c('UQCRB','TMED10'))
+mel_dif_plot_FOX_MTPN_ <- dcast(mel_dif_plot_FOX_MTPN_,Condition+variable~genes,value.var ='value' ,fill = NA)
+
+
+p1 <- ggplot(mel_dif_plot_FOX_MTPN_,aes(x = UQCRB,y =TMED10 ,color = Condition,shape = Condition,size = 15)) + 
+  geom_point() + theme_classic() +scale_color_manual(values=c('#dcdcdc','#2C2C2C')) + rremove('legend') +
+  coord_cartesian(xlim = c(-2,2))+theme(axis.title = element_text(size = 24), axis.text = element_text(size = 22))
+
+
+
+p1
+p2
+ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/figs/SubPop/joint_dist.png',plot = p1+p2,height = unit(6, "cm"),width = unit(12, "cm"))
+ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/figs/SubPop/one_dist.png',plot = diff_prot_exp,height = unit(6, "cm"),width = unit(10, "cm"))
+
 
 
 ```
 
-```{r Plotting}
-s <- (bp_m + (sp4 | sp3  | sp2 | sp1)/(bp1 | bp2 | bp3 | bp4)) + plot_layout(ncol=2,widths = c(1,2))
-s
-#ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/figs/SubPop/SubPOP.png',plot = s,height = unit(6, "cm"),width = unit(20, "cm"))
-
-#ggsave('/Users/andrewleduc/Desktop/test_fig3_2.png',plot =(comp_mon | comp_mel),height = unit(5, "cm"),width = unit(20, "cm"))
-```
+Here is some code that computes significant correlations for the monocytes and melanoma cells, this is for figure 3.
 
 
 
