@@ -7,15 +7,14 @@ Loading functions and raw data
 ```{r Load Functions and data}
 
 source("functions_parameters.R")
-ev <- read.delim("../dat/raw_data/ev_updated.txt")
-design<-read.csv("../dat/raw_data/annotation.csv")
-batch<-read.csv("../dat/raw_data/batch.csv")
-
+ev <- read.delim("../dat/raw_data/pSCoPE/ev_updated.txt")
+design<-read.csv("../dat/raw_data/pSCoPE/annotation.csv")
+batch<-read.csv("../dat/raw_data/pSCoPE/batch.csv")
+ev_full <- read.delim('/Users/andrewleduc/Downloads/evidence_rev.txt')
 # Data base for converting Gene Names to Proteins
 convert <- read.delim('../dat/raw_data/human_uniprot_db.txt')
 convert$Gene.names <- as.character(convert$Gene.names)
 convert$Gene.names2 <- gsub(' .*','',convert$Gene.names)
-
 
 
 ```
@@ -23,15 +22,13 @@ convert$Gene.names2 <- gsub(' .*','',convert$Gene.names)
 Filtering and data triming, using agreement between peptides mapping to same protein
 ```{r Single Cell Data Filtering} 
 
-
-
 # Reference channel number (1-11, or 1-16)
 ref_channel<- 2
 
 # Add your cell type labels, must match those used in experimental design
 your_labels<-c('m','u','neg')
 your_control_label<-"neg"
-
+colnames(batch)[2:4]
 ev[,colnames(batch)[-1]]<-NA
 for(X in batch$set){
   
@@ -44,6 +41,8 @@ for(X in batch$set){
 
 # Create unique peptide+charge column:
 ev$modseq<-paste0(ev$Modified.sequence,ev$Charge)
+
+
 
 # Add X in front of experiment names because R doesn't like column names starting with numbers
 ev$Raw.file<-paste0("X",ev$Raw.file)
@@ -81,6 +80,7 @@ ev$SC_sum <- rowSums(ev[, ri.index[5:length(ri.index)]])
 ev <-ev %>% filter(SC_sum != 0)
 
 
+
 #Clean Protein Annotations
 parse_row<-grep("|",ev$Leading.razor.protein, fixed=T)
 if(length(parse_row)>0){
@@ -98,6 +98,19 @@ if(length(parse_row)>0){
 
 # Normalize single cell runs to normalization channel
 ev_raw_intense_plot <- ev
+
+#ev_raw_intense_plot[ev_raw_intense_plot==0]<- NA
+#ev_raw_intense_plot$SC_sum <- rowMeans(ev_raw_intense_plot[, ri.index[5:length(ri.index)]])*1.1/ev_raw_intense_plot[, ri.index[ref_channel]]
+
+#ev_raw_intense_plot$SC_carrier_rat <- rowMeans(ev_raw_intense_plot[, ri.index[5:length(ri.index)]])/ev_raw_intense_plot[, ri.index[1]]
+
+#  font("x.text", size=20)+ font("y.text", size=20)
+
+#ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/PDFs/car_sc_rat.pdf',plot = car_sc_rat,height = unit(6, "in"),width = unit(7, "in"),dpi = 1000)
+
+
+
+
 ev[, ri.index] <- ev[, ri.index] / ev[, ri.index[ref_channel]]
 
 # Organize data into a more convenient data structure:
@@ -352,6 +365,7 @@ t5<-sc.imp
 
 #LC/ Different Mass Spec Batches
 batch.covs <- ev.melt.uniqueID$lcbatch[match(colnames(sc.imp), ev.melt.uniqueID$id)]
+#batch.covs <- ev.melt.uniqueID$Raw.file[match(colnames(sc.imp), ev.melt.uniqueID$id)]
 #RI Bias Batches
 batch.covsRI <- ev.melt.uniqueID$channel[match(colnames(sc.imp), ev.melt.uniqueID$id)]
 
@@ -360,7 +374,8 @@ mod<-data.frame(ev.melt.uniqueID$celltype[match(colnames(sc.imp), ev.melt.unique
 mod<-model.matrix(~as.factor(celltype), data=mod)
 
 
-matrix.sc.batch <- removeBatchEffect(sc.imp, batch=factor(batch.covs), batch2=factor(batch.covsRI),design=mod)
+matrix.sc.batch <- removeBatchEffect(sc.imp, batch=factor(batch.covs), design=mod)
+#matrix.sc.batch <- ComBat(matrix.sc.batch, batch=factor(batch.covs))   batch2=factor(batch.covsRI),
 
 #matrix.sc.batch <- removeBatchEffect(sc.imp, batch=factor(batch.covs),design=mod)
 
@@ -369,7 +384,8 @@ matrix.sc.batch <- removeBatchEffect(sc.imp, batch=factor(batch.covs), batch2=fa
 
 #matrix.sc.batch <- ComBat(sc.imp, batch=batch.covs)
 #Correct Label Bias
-#matrix.sc.batch2 <- ComBat(matrix.sc.batch, batch=batch.covs2)
+
+#matrix.sc.batch2 <- ComBat(matrix.sc.batch, batch=batch.covs)
 
 t6<- cr_norm_log(matrix.sc.batch)
 #write.csv(t6,"../dat/Proccessed_data/t6.csv",row.names = T)
@@ -377,6 +393,7 @@ t6<- cr_norm_log(matrix.sc.batch)
 #Remove imputed values from data
 t7 <- t6
 t7[is.na(t4b)==T] <- NA
+dim(t7)
 
 ## Store Matrix of Weights
 
@@ -394,7 +411,8 @@ t7[is.na(t4b)==T] <- NA
 ```{r Data Set Wide PCA plotting}
 
 mat.sc.imp <- t6
-
+#mat.sc.imp <- cr_norm_log(t5)
+#mat.sc.imp <- mat.sc.imp[,pca.display_batch$id]
 X.m <-  mat.sc.imp
 
 r1<-cor(t(X.m))
@@ -421,10 +439,18 @@ pca.melt <- melt(scx); colnames(pca.melt)<-c("id","pc","value")
 ev.melt.uniqueID_lim<-ev.melt.uniqueID[,c(4:6,8,10:11)]
 #write.csv(ev.melt.uniqueID_lim,'../dat/Proccessed_data/meta.csv')
 pca.melt <- left_join(pca.melt,ev.melt.uniqueID_lim,by= 'id')
-pca.display <- dcast(pca.melt, id + celltype + digest + channel ~ pc, value.var = "value", fill=NA)
+pca.display <- dcast(pca.melt, id + lcbatch + sortday + celltype + digest + channel ~ pc, value.var = "value", fill=NA)
 
 PCx<-"PC1"
 PCy<-"PC2"
+
+pca.display$sp <- NA
+pca.display$sp[pca.display$id %in% meta_mel_C2$id] <- 'S'
+pca.display$sp[!pca.display$id %in% meta_mel_C2$id] <- 'nS'
+aov_out <- aov(PC2 ~ sp, data = pca.display)
+aov_out<- summary(aov_out)
+aov_out <- data.frame(aov_out[[1]])
+
 
 main_pca <- ggscatter(pca.display, color = 'celltype' ,x =PCx, y = PCy, size = 5, alpha=0.5) +
   xlab(paste0(PCx,"  (", round(percent_var[1],0),"%)")) +
@@ -443,6 +469,84 @@ main_pca <- ggscatter(pca.display, color = 'celltype' ,x =PCx, y = PCy, size = 5
 main_pca 
 
 
+ggscatter(pca.display, color = 'lcbatch' ,x =PCx, y = PCy, size = 5, alpha=0.5) +
+  xlab(paste0(PCx,"  (", round(percent_var[1],0),"%)")) +
+  ylab(paste0(PCy,"  (", round(percent_var[2],0),"%)")) +
+  font("ylab",size=30) +
+  font("xlab",size=30) +
+  font("xy.text", size=20)+ 
+  rremove("legend") +
+  #scale_color_manual(values = my_colors[2:3]) +
+  #annotate("text", x=-0.025, y=0.21,label="Macrophage", color=my_colors[2], size=10)  +
+  #annotate("text", x=0.03, y=0.21, label="Monocyte", color=my_colors[3], size=10) +
+  annotate("text", x=-.0040, y=-0.015, label=paste0(dim(mat.sc.imp)[1]," proteins"), size=8) +
+  annotate("text", x=-.0045, y=-0.0, label=paste0(dim(mat.sc.imp)[2], " single cells"), size=8) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 4)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 3))
+
+
+
+pca.disp_batch <- pca.display %>% left_join(cellenOne_c2q, by = c('id'='celltype'))
+pca.disp_batch <- pca.disp_batch[sample(nrow(pca.disp_batch)),]
+pca.disp_batch$slide   <- as.character(pca.disp_batch$slide)
+
+
+
+slide <-ggscatter(pca.disp_batch, color = 'slide' ,x =PCx, y = PCy, size = 3, alpha=0.5) +
+  xlab(paste0(PCx,"  (", round(percent_var[1],0),"%)")) +
+  ylab(paste0(PCy,"  (", round(percent_var[2],0),"%)")) +
+  font("ylab",size=30) +
+  font("xlab",size=30) +
+  font("xy.text", size=20)+ scale_y_reverse()+
+  #scale_color_manual(values = my_colors[2:3]) +
+  #annotate("text", x=-0.025, y=0.21,label="Macrophage", color=my_colors[2], size=10)  +
+  #annotate("text", x=0.03, y=0.21, label="Monocyte", color=my_colors[3], size=10) +
+  #annotate("text", x=-.0040, y=-0.015, label=paste0(dim(mat.sc.imp)[1]," proteins"), size=8) +
+  #annotate("text", x=-.0045, y=-0.0, label=paste0(dim(mat.sc.imp)[2], " single cells"), size=8) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 4)) 
+
+pca.disp_batch$dropXPos <- as.numeric(pca.disp_batch$dropXPos)
+pca.disp_batch$dropYPos <- as.numeric(pca.disp_batch$dropYPos)
+#pca.disp_batch$slide_position <- pca.disp_batch$dropYPos+pca.disp_batch$dropXPos
+
+X_pos <-ggscatter(pca.disp_batch, color = 'dropXPos' ,x =PCx, y = PCy, size = 3, alpha=0.5) +
+  xlab(paste0(PCx,"  (", round(percent_var[1],0),"%)")) +
+  ylab(paste0(PCy,"  (", round(percent_var[2],0),"%)")) +
+  font("ylab",size=30) +
+  font("xlab",size=30) +
+  font("xy.text", size=20)+ scale_y_reverse()+
+  #scale_color_manual(values = my_colors[2:3]) +
+  #annotate("text", x=-0.025, y=0.21,label="Macrophage", color=my_colors[2], size=10)  +
+  #annotate("text", x=0.03, y=0.21, label="Monocyte", color=my_colors[3], size=10) +
+  #annotate("text", x=-.0040, y=-0.015, label=paste0(dim(mat.sc.imp)[1]," proteins"), size=8) +
+  #annotate("text", x=-.0045, y=-0.0, label=paste0(dim(mat.sc.imp)[2], " single cells"), size=8) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 4)) +
+  scale_color_gradient2(midpoint = 40, low = "blue", mid = "white", high = "red",name = 'X position') + theme(plot.title = element_text(size = 20))
+
+
+y_pos <- ggscatter(pca.disp_batch, color = 'dropYPos' ,x =PCx, y = PCy, size = 3, alpha=0.5) +
+  xlab(paste0(PCx,"  (", round(percent_var[1],0),"%)")) +
+  ylab(paste0(PCy,"  (", round(percent_var[2],0),"%)")) +
+  font("ylab",size=30) +
+  font("xlab",size=30) +
+  font("xy.text", size=20)+ scale_y_reverse()+
+  #scale_color_manual(values = my_colors[2:3]) +
+  #annotate("text", x=-0.025, y=0.21,label="Macrophage", color=my_colors[2], size=10)  +
+  #annotate("text", x=0.03, y=0.21, label="Monocyte", color=my_colors[3], size=10) +
+  #annotate("text", x=-.0040, y=-0.015, label=paste0(dim(mat.sc.imp)[1]," proteins"), size=8) +
+  #annotate("text", x=-.0045, y=-0.0, label=paste0(dim(mat.sc.imp)[2], " single cells"), size=8) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 4)) +scale_color_gradient2(midpoint = 40, low = "blue", mid = "white", high = "red",name = 'Y position') + theme(plot.title = element_text(size = 20))
+
+
+
+pca.disp_batch2 <- pca.disp_batch %>% filter(celltype == 'u')
+pca.disp_batch2 <- pca.disp_batch2 %>% filter(PC1 < -.015)
+pca.disp_batch3 <- pca.disp_batch2 %>% filter(lcbatch == 'C')
+ggplot(pca.disp_batch2,aes(x=PC1,fill=slide)) + geom_density(alpha = .5)
+
+
+ggplot(pca.disp_batch3,aes(x=PC1,fill=slide)) + geom_histogram(position = 'identity',alpha = .7)
+
 
 #Save IDs for Monocytes and Melanoma Cells 
 #Monocytes <- pca.display %>% dplyr::filter(celltype == 'u')
@@ -458,6 +562,212 @@ main_pca
 
 #write.csv(t7_Monocytes,'../dat/Proccessed_data/t7_Monocytes.csv',row.names = T)
 #write.csv(t7_Melanomas,'../dat/Proccessed_data/t7_Melanomas.csv',row.names = T)
+
+slide
+X_pos
+y_pos
+
+ri_list <- c(1,5,6,7,8,9,10,11,12,13,14,15,16,17,18)
+  ri<-paste0("Reporter.intensity.",ri_list)
+  ri.ind<-which(colnames(ev)%in%ri)
+  raw.ind<-which(colnames(ev)%in%"Raw.file")
+  miss.ind<-which(colnames(ev)%in%"Missed.cleavages")
+  ri.max<-which(colnames(ev)%in%names(colMeans(ev[,ri.ind]))[ colMeans(ev[,ri.ind])==max(colMeans(ev[,ri.ind])) ] )
+  ev2<-ev
+  ev2[,ri.ind]<-ev2[,ri.ind] / ev2[,67]
+  plotdata<-melt(ev2[,c(raw.ind, miss.ind, ri.ind[ri.ind!=67])], id.vars = c("Raw.file","Missed.cleavages"))
+  
+  plotdata$value[plotdata$value==Inf]<-NA
+  plotdata$Missed.cleavages[plotdata$Missed.cleavages>0]<-1
+  
+  plotdata<-plotdata %>% 
+    dplyr::group_by(Missed.cleavages, Raw.file,variable) %>%
+    dplyr::summarise(mean_val = mean(value, na.rm=T)) %>% 
+    dplyr::group_by(Raw.file, variable) %>%
+    dplyr::summarise(miss_rat = mean_val[Missed.cleavages==1] / mean_val[Missed.cleavages==0] )
+  
+  plotdata$miss_rat <- log2(plotdata$miss_rat)
+  
+
+V_mel <- rowMeans(t7[,colnames(t7) %in% meta_mel$id],na.rm = T)
+V_mon <- rowMeans(t7[,colnames(t7) %in%meta_mon$id],na.rm = T)
+mat <- cbind(V_mel,V_mon)
+rownames(mat) <- rownames(t7)
+term_names <- unique(GO_db$GO_term_name)
+p.val <- c()
+term_store <- c()
+FC <- c()
+for(i in 1:length(term_names)){
+  
+  GO_lim <- GO_db %>% filter(GO_term_name %in% term_names[i])
+  mat_lim <- mat[rownames(mat) %in% GO_lim$Uniprot,]
+  if(length(mat_lim) > 6){
+    p.val <- c(p.val,t.test(mat_lim[,1],mat_lim[,2])$p.value)
+    term_store <- c(term_store,term_names[i])
+    FC <- c(FC,(mean(mat_lim[,1],na.rm=T)-mean(mat_lim[,2],na.rm=T)))
+  }
+  
+}
+
+df_pop <- as.data.frame(p.val)
+df_pop$term <- term_store
+df_pop$FC <- FC
+
+'positive regulation of epithelial cell proliferation'
+'melanosome'
+'epidermis development'
+
+#'phagocytosis'
+'leukocyte chemotaxis'
+'MHC class I protein complex'
+'defense response to bacterium'
+
+
+dim(t7)
+GO_db_set1 <- GO_db %>% filter(GO_term_name == 'melanosome' )
+Gene_set1 <- t7[rownames(t6) %in% GO_db_set1$Uniprot,]
+pca.display$cell_sens <- colMedians(as.matrix(Gene_set1),na.rm = T)
+pca.display$cell_sens[pca.display$cell_sens > 1] <- 1
+pca.display$cell_sens[pca.display$cell_sens < -1] <- -1
+Melanosome <- ggscatter(pca.display, color = 'cell_sens' ,x =PCx, y = PCy, size = 5, alpha=0.5) +
+  xlab("") +
+  ylab("") +
+  font("ylab",size=0) +
+  font("xlab",size=0) +
+  font("xy.text", size=0)+
+  rremove("legend") +
+  ggtitle('Melanosome') +scale_y_reverse()+
+  scale_color_gradient2(midpoint = .0, low = "blue", mid = "white",
+                          high = "red",name = '') + theme(plot.title = element_text(size = 20))
+
+GO_db_set1 <- GO_db %>% filter(GO_term_name == 'positive regulation of epithelial cell proliferation' )
+Gene_set1 <- t7[rownames(t6) %in% GO_db_set1$Uniprot,]
+pca.display$cell_sens <- colMedians(as.matrix(Gene_set1),na.rm = T)
+pca.display$cell_sens[pca.display$cell_sens > 1] <- 1
+pca.display$cell_sens[pca.display$cell_sens < -1] <- -1
+Epith_prolif <- ggscatter(pca.display, color = 'cell_sens' ,x =PCx, y = PCy, size = 5, alpha=0.5) +
+  xlab("") +
+  ylab("") +
+  font("ylab",size=0) +
+  font("xlab",size=0) +
+  font("xy.text", size=0)+
+  rremove("legend") +
+  ggtitle('epithelial cell proliferation') +scale_y_reverse()+
+  scale_color_gradient2(midpoint = .0, low = "blue", mid = "white",
+                          high = "red",name = '') + theme(plot.title = element_text(size = 20))
+
+GO_db_set1 <- GO_db %>% filter(GO_term_name == 'epidermis development' )
+Gene_set1 <- t6[rownames(t6) %in% GO_db_set1$Uniprot,]
+pca.display$cell_sens <- colMeans(as.matrix(Gene_set1),na.rm = T)
+pca.display$cell_sens[pca.display$cell_sens > .5] <- .5
+pca.display$cell_sens[pca.display$cell_sens < -.5] <- -.5
+epidermis <- ggscatter(pca.display, color = 'cell_sens' ,x =PCx, y = PCy, size = 5, alpha=0.5) +
+  xlab("") +
+  ylab("") +
+  font("ylab",size=0) +
+  font("xlab",size=0) +
+  font("xy.text", size=0)+
+  rremove("legend") +
+  ggtitle('epidermis development') +scale_y_reverse()+
+  scale_color_gradient2(midpoint = .0, low = "blue", mid = "white",
+                          high = "red",name = '') + theme(plot.title = element_text(size = 20))
+
+GO_db_set1 <- GO_db %>% filter(GO_term_name == 'leukocyte chemotaxis' )
+Gene_set1 <- t7[rownames(t6) %in% GO_db_set1$Uniprot,]
+pca.display$cell_sens <- colMedians(as.matrix(Gene_set1),na.rm = T)
+pca.display$cell_sens[pca.display$cell_sens > 1] <- 1
+pca.display$cell_sens[pca.display$cell_sens < -1] <- -1
+
+leukocyte <- ggscatter(pca.display, color = 'cell_sens' ,x = PCx, y = PCy, size = 5, alpha=0.5) +
+  xlab("") +
+  ylab("") +
+  font("ylab",size=0) +
+  font("xlab",size=0) +
+  font("xy.text", size=0)+
+  rremove("legend") +
+  ggtitle('leukocyte chemotaxis') + scale_y_reverse()+
+  scale_color_gradient2(midpoint = .0, low = "blue", mid = "white",
+                          high = "red",name = '') + theme(plot.title = element_text(size = 20))
+
+GO_db_set1 <- GO_db %>% filter(GO_term_name == 'MHC class I protein complex')
+Gene_set1 <- t6[rownames(t6) %in% GO_db_set1$Uniprot,]
+pca.display$cell_sens <- colMeans(as.matrix(Gene_set1),na.rm = T)
+pca.display$cell_sens[pca.display$cell_sens > .75] <- .75
+pca.display$cell_sens[pca.display$cell_sens < -.75] <- -.75
+MHC <- ggscatter(pca.display, color = 'cell_sens' ,x =PCx, y = PCy, size = 5, alpha=0.5) +
+  xlab("") +
+  ylab("") +
+  font("ylab",size=0) +
+  font("xlab",size=0) +
+  font("xy.text", size=0)+
+  rremove("legend") +
+  ggtitle('MHC class I') + scale_y_reverse()+
+  scale_color_gradient2(midpoint = .0, low = "blue", mid = "white",
+                          high = "red",name = '') + theme(plot.title = element_text(size = 20))
+
+GO_db_set1 <- GO_db %>% filter(GO_term_name == 'defense response to bacterium')
+Gene_set1 <- t6[rownames(t6) %in% GO_db_set1$Uniprot,]
+pca.display$cell_sens <- colMeans(as.matrix(Gene_set1),na.rm = T)
+pca.display$cell_sens[pca.display$cell_sens > .75] <- .75
+pca.display$cell_sens[pca.display$cell_sens < -.75] <- -.75
+defense <- ggscatter(pca.display, color = 'cell_sens' ,x =PCx, y = PCy, size = 5, alpha=0.5) +
+  xlab("") +
+  ylab("") +
+  font("ylab",size=0) +
+  font("xlab",size=0) +rremove('legend')+
+  font("xy.text", size=0)+scale_y_reverse()+
+  ggtitle('defense response to bacterium') +
+  scale_color_gradient2(midpoint = .0, low = "blue", mid = "white",
+                          high = "red",name = '') + theme(plot.title = element_text(size = 20))
+
+
+( epidermis  | Epith_prolif | Melanosome)/( defense | MHC | leukocyte)
+
+ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/PDFs/slide.pdf',plot = slide,height = unit(6, "in"),width = unit(7, "in"),dpi = 1000)
+ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/PDFs/xpos.pdf',plot = X_pos,height = unit(6, "in"),width = unit(7, "in"),dpi = 1000)
+ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/PDFs/ypos.pdf',plot = y_pos,height = unit(6, "in"),width = unit(7, "in"),dpi = 1000)
+ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/PDFs/MSs.pdf',plot = slide_MC,height = unit(6, "in"),width = unit(7, "in"),dpi = 1000)
+
+ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/PDFs/GSEA_mon_mel.pdf',plot = ( epidermis  | Epith_prolif | Melanosome)/( defense | MHC | leukocyte),height = unit(7, "in"),width = unit(12, "in"),dpi = 1000)
+
+pca.display_batch_s1 <- pca.display_batch %>% filter(slide == '1')
+pca.display_batch_s2 <- pca.display_batch %>% filter(slide == '2')
+pca.display_batch_s3 <- pca.display_batch %>% filter(slide == '3')
+pca.display_batch_s4 <- pca.display_batch %>% filter(slide == '4')
+
+ev.matrix_slide <- ev.matrix[,pca.display$id]
+
+ev.matrix_slide <- melt(ev.matrix_slide)
+ev.matrix_slide$slide <- NA
+ev.matrix_slide$slide[ev.matrix_slide$Var2 %in% pca.display_batch_s1$id] <- '1'
+ev.matrix_slide$slide[ev.matrix_slide$Var2 %in% pca.display_batch_s2$id] <- '2'
+ev.matrix_slide$slide[ev.matrix_slide$Var2 %in% pca.display_batch_s3$id] <- '3'
+ev.matrix_slide$slide[ev.matrix_slide$Var2 %in% pca.display_batch_s4$id] <- '4'
+
+ev.matrix_slide$size <- NA
+
+
+
+for(i in 1:nrow(pca.display_batch)){
+  
+  ev.matrix_slide$size[ev.matrix_slide$Var2 %in% pca.display_batch$id[i]] <- pca.display_batch$diameter[i]
+  
+}
+
+
+
+
+ev.matrix_slide <- ev.matrix_slide %>% filter(is.na(slide) == F)
+
+ev.matrix_slide$val_di <-ev.matrix_slide$value/ev.matrix_slide$size
+ggplot(ev.matrix_slide,aes(x=log2(value*1.2),fill=slide))+geom_density(alpha = .5)+ geom_vline(xintercept = log2(.16)) +xlab('log2(single cell/refference')
+
+ev.matrix_slide$value[ev.matrix_slide$value == 0] <- NA
+
+ggplot(ev.matrix_slide,aes(y=log10(val_di),x=slide))+geom_boxplot() +ylab('log2(single cell/refference)')
+
+ggplot(pca.display_batch,aes(y=diameter,x=slide))+geom_boxplot() #+ylab('log2(single cell/refference)')
+
 
 ```
 
@@ -612,19 +922,53 @@ ev.matrix.sc.u<-ev.matrix[, colnames(ev.matrix)%in%mon]
 ev.matrix.sc.m<-ev.matrix[, colnames(ev.matrix)%in%mel]
 ev.matrix.neg<- ev.matrix[, colnames(ev.matrix)%in%neg$id]
 
-neg_miss <- (colSums(ev.matrix.neg==0,na.rm=T)/colSums(is.na(ev.matrix.neg)==F))
-missingDF <- as.data.frame(neg_miss)
-missingDF$cond <- 'neg'
-colnames(scDF.m)[1] <- 'fract.miss'
+ev.matrix.sc.u <- melt(ev.matrix.sc.u)
+ev.matrix.sc.m <- melt(ev.matrix.sc.m)
+ev.matrix.neg <- melt(ev.matrix.neg)
+
+frac1 <- (hist(log10(ev.matrix.sc.u$value),25,plot=F)$counts) / (sum(hist((look2$one),25,plot=F)$counts))
+frac2 <- (hist(log10(ev.matrix.sc.m$value),25,plot=F)$counts) / (sum(hist((look2$two),25,plot=F)$counts))
+frac3 <- (hist(log10(ev.matrix.neg$value),25,plot=F)$counts) / (sum(hist((look2$three),25,plot=F)$counts))
 
 
-sc_miss.m <- (colSums(ev.matrix.sc.m==0,na.rm=T)/colSums(is.na(ev.matrix.sc.m)==F))
-scDF.m<- as.data.frame(sc_miss.m)
-scDF.u$cond <- 'mon'
-df_all <- rbind(missingDF,scDF.u,scDF.m)
 
-ggplot(df_all,aes(x =fract.miss,fill = cond )) + geom_histogram(position = 'identity',alpha = .3)
-ggplot(df_all,aes(x =fract.miss,fill = cond )) + geom_density(alpha = .3)+theme_classic()
+pep_and_prot1 <- as.data.frame(frac1)
+pep_and_prot1$type = 'Melanoma'
+pep_and_prot1$scaler <- (1:nrow(pep_and_prot1))/3
+pep_and_prot2<- as.data.frame(frac2)
+pep_and_prot2$type <- 'Monocyte'
+pep_and_prot2$scaler <- (1:nrow(pep_and_prot2))/3
+colnames(pep_and_prot2)[1] <- 'frac1'
+pep_and_prot3<- as.data.frame(frac3)
+pep_and_prot3$type <- 'Negative ctrl'
+pep_and_prot3$scaler <- (1:nrow(pep_and_prot3))/3
+colnames(pep_and_prot3)[1] <- 'frac1'
+pep_and_prot3 <- rbind(pep_and_prot1,pep_and_prot2,pep_and_prot3)
+pep_and_prot3$frac1 <-round(pep_and_prot3$frac1,2)
+
+pep_and_prot3_1 <- pep_and_prot3 %>% filter(scaler > 2.9)
+pep_and_prot3_1 <- pep_and_prot3_1[order(pep_and_prot3_1$scaler),]
+pep_and_prot3_1$frac1[1] <- .15
+pep_and_prot3_1$frac1[2] <- .26
+pep_and_prot3_1$frac1[3] <- .6
+pep_and_prot3_1$type[pep_and_prot3_1$type == 'Negative ctrl'] <- ' Negative ctrl'
+pep_and_prot3_1$type[pep_and_prot3_1$type == 'Negative ctrl'] <- ' Negative ctrl'
+pep_and_prot3_1$type[pep_and_prot3_1$type == 'Monocyte'] <- 'aMonocyte'
+
+
+signal_pSCoPE <-ggplot(pep_and_prot3_1,aes(y = frac1,x=scaler,fill=type )) + geom_bar(stat="identity",position ="dodge",alpha = 1)+ theme_classic()+
+  ylab('Fraction of values') + xlab('log10(RI intensty)')+
+  theme(axis.title.x = element_text(size = 30),axis.title.y = element_text(color = 'black',size = 30),axis.text.x = element_text(color = 'black',size = 20),
+        axis.text.y = element_text(size = 20,color = 'black'),
+        legend.key.size = unit(.8, 'cm'), #change legend key size
+        legend.key.height = unit(.8, 'cm'), #change legend key height
+        legend.key.width = unit(.8, 'cm'), #change legend key width
+        legend.title = element_text(size=0), #change legend title font size
+        legend.text = element_text(size=20),
+        legend.position=c(.75, .75)) + scale_fill_manual(values = c("#000000","#007A39","#F6BE00")) + xlim(c(2.8,7.5))
+
+ggsave('/Users/andrewleduc/Desktop/nPOP_Paper/PDFs/Ext_data_SCQC/signal_pscope.pdf',plot = signal_pSCoPE,height = unit(6, "in"),width = unit(7, "in"),dpi = 1000)
+
 
 
 ```
@@ -767,24 +1111,20 @@ ggsave("/Users/andrewleduc/Desktop/nPOP_Paper/figs/SC_QC/Lysis2.png",plot = sup_
 ```
 
 ```{r Bulk and SC PCA}
-
-
+meta <- read.csv('../dat/Proccessed_data/pSCoPE/meta.csv',row.names = 1)
 Bulk <- read.delim('../dat/raw_data/Bulk_searches/Bulk_Correlate_to_SC/evidence.txt')
-
 Bulk <- getDat(Bulk)
 Bulk<- getRI(Bulk)
 Bulk <- col_norm(Bulk,6,0)
 Bulk$Reporter.intensity.corrected.1 <- NULL
 Bulk <- Bulk %>% filter(Raw.file == unique(Bulk$Raw.file[1]))
-Bulk <- Bulk %>% select(Leading.razor.protein,contains('Report'))
-
+Bulk <- Bulk %>% dplyr::select(Leading.razor.protein,contains('Report'))
 parse_row<-grep("|",Bulk$Leading.razor.protein, fixed=T)
 if(length(parse_row)>0){
   split_prot<-str_split(Bulk$Leading.razor.protein[parse_row], pattern = fixed("|"))
   split_prot2<-unlist(split_prot)[seq(2,3*length(split_prot),3)]
   Bulk$Leading.razor.protein[parse_row]<-split_prot2
 }
-
 colnames(Bulk) <- c('Leading.razor.protein','M1','M2','M3','M4','U1','U2','U3','U4')
 Bulk <- melt(Bulk, id.vars = 'Leading.razor.protein')
 Bulk <- Bulk %>% group_by(Leading.razor.protein,variable) %>% dplyr::summarize(prot = median(value, na.rm=T))
@@ -793,22 +1133,21 @@ Bulk <- col_norm(Bulk,2,0)
 Bulk <- row_norm(Bulk,2,0)
 Bulk[,2:9] <- log2(Bulk[,2:9])
 rownames(Bulk) <- Bulk$Leading.razor.protein
+t4b <- as.matrix(read.csv('../dat/Proccessed_data/pSCoPE/t4b.csv',row.names = 1))
 
 t4b_lim <- filt.mat.cr(t4b,.8,.8)
 t4b_lim<-as.data.frame(t4b_lim)
 t4b_lim$Leading.razor.protein <- rownames(t4b_lim)
 t4b.m <- melt(t4b_lim,id.vars = 'Leading.razor.protein')
 Bulk.m <- melt(Bulk,id.vars = 'Leading.razor.protein')
-
 both <- rbind(t4b.m,Bulk.m)
 both <- dcast(both,Leading.razor.protein~variable,value.var = 'value')
 rownames(both)<- both$Leading.razor.protein
 both$Leading.razor.protein <- NULL
 both <- as.matrix(both)
 sc.imp_bulk <- hknn(both, k.t)
-batch.covs <- ev.melt.uniqueID$lcbatch[match(colnames(sc.imp_bulk), ev.melt.uniqueID$id)]
+batch.covs <- meta$lcbatch[match(colnames(sc.imp_bulk), meta$id)]
 batch.covs[is.na(batch.covs) == T] = 'Bulk'
-
 rr<-c()
 rawx<-c()
 for(Y in unique(batch.covs)){
@@ -823,68 +1162,53 @@ for(Y in unique(batch.covs)){
   
 }
 length(rr)
-
 sc.imp_bulk[sc.imp_bulk==-Inf] <- 0
-sc.imp_bulk_ <- sc.imp_bulk[-869,]
-
+sc.imp_bulk[sc.imp_bulk==Inf] <- 0
+#sc.imp_bulk_ <- sc.imp_bulk[-869,]
 matrix.sc.batch <- ComBat(sc.imp_bulk, batch=batch.covs)
-
 X.m <-  cr_norm_log(matrix.sc.batch)
-
 r1<-cor(t(X.m))
 rsum<-rowSums(r1^2)
-
-
 # Dot product of each protein correlation vector with itself
 X.m <- diag(rsum) %*%  X.m
 pca.imp.cor <- cor(X.m, use = 'pairwise.complete.obs',method = c('pearson'))
-
 # PCA
 sc.pca<-eigen(pca.imp.cor)
 scx<-as.data.frame(sc.pca$vectors)
 colnames(scx)<-paste0("PC",1:ncol(scx))
 scx$cells<-colnames(pca.imp.cor)
-
 # Percent of variance explained by each principle component
 pca_var <- sc.pca$values
 percent_var<- pca_var/sum(pca_var)*100
 plot(1:length(percent_var), percent_var, xlab="PC", ylab="% of variance explained")
-
 # Map meta data
 pca.melt <- melt(scx); colnames(pca.melt)<-c("id","pc","value")
 pca.melt$celltype <- NA
-
 pca.melt$celltype[pca.melt$id %in% ev.melt.uniqueID_lim$id[ev.melt.uniqueID_lim$celltype == 'u']] <- 'Mon_SC'
 pca.melt$celltype[pca.melt$id %in% ev.melt.uniqueID_lim$id[ev.melt.uniqueID_lim$celltype == 'm']] <- 'Mel_SC'
 pca.melt$celltype[pca.melt$id=='M1'] <-'Bulk_Mon'
 pca.melt$celltype[pca.melt$id=='M2'] <-'Bulk_Mon'
 pca.melt$celltype[pca.melt$id=='M3'] <-'Bulk_Mon'
 pca.melt$celltype[pca.melt$id=='M4'] <-'Bulk_Mon'
-
 pca.melt$celltype[pca.melt$id=='U1'] <-'Bulk_Mel'
 pca.melt$celltype[pca.melt$id=='U2'] <-'Bulk_Mel'
 pca.melt$celltype[pca.melt$id=='U3'] <-'Bulk_Mel'
 pca.melt$celltype[pca.melt$id=='U4'] <-'Bulk_Mel'
-
 pca.melt$celltype[is.na(pca.melt$celltype)==T ] <-'Mel_SC'
-
 pca.display <- dcast(pca.melt, id + celltype ~ pc, value.var = "value", fill=NA)
 pca.display$type_sh <- NA
 pca.display$type_sh[pca.display$celltype == 'Bulk_Mel'] <-'Bulk'
 pca.display$type_sh[pca.display$celltype == 'Bulk_Mon'] <-'Bulk'
 pca.display$type_sh[pca.display$celltype == 'Mon_SC'] <-'SC'
 pca.display$type_sh[pca.display$celltype == 'Mel_SC'] <-'SC'
-
 pca.display$type_col <- NA
 pca.display$type_col[pca.display$celltype == 'Bulk_Mel'] <-'Melanoma'
 pca.display$type_col[pca.display$celltype == 'Bulk_Mon'] <-'Monocyte'
 pca.display$type_col[pca.display$celltype == 'Mon_SC'] <-'Monocyte'
 pca.display$type_col[pca.display$celltype == 'Mel_SC'] <-'Melanoma'
-
 pca.display_ <- pca.display %>% filter(type_col == 'Monocyte')
 pca.display_ <- pca.display_ %>% filter(PC1 > -.005)
 pca.display <- pca.display %>% filter(!id %in% pca.display_$id)
-
 pca_main <- pca.display %>% ggplot(aes(x = PC1, y = PC2, color = type_col, shape = type_sh, size = type_sh,alpha = type_sh))  + 
         geom_point(stroke = 2) + scale_size_discrete(range = c(12,3)) +    
         scale_shape_manual(values = c(23,16)) +   
@@ -900,12 +1224,10 @@ pca_main <- pca.display %>% ggplot(aes(x = PC1, y = PC2, color = type_col, shape
         "",x="PC1",y = "PC2") + rremove('legend') + 
   annotate("text", x=.0055, y=-0.04, label=paste0("2844 proteins"), size=8) +
   #annotate("text", x=.006, y=-0.025, label=paste0("1,543 single cells"), size=8) +
-  xlim(c(-.035,.035)) + xlab('PC1 (62%)') + ylab('PC2 (3%)')
-
-
-ggsave("/Users/andrewleduc/Desktop/nPOP_Paper/figs/SC_QC/pca_main.png",plot = pca_main,width = unit(6, "cm"),height =  unit(5, "cm"))
-
+  xlab('PC1 (62%)') + ylab('PC2 (3%)')
+ggsave("/Users/andrewleduc/Desktop/nPOP_Paper/PDFs/pca_main2.pdf",plot = pca_main,width = unit(6.5, "cm"),height =  unit(5, "cm"))
 pca_main
+
 
 ```
 
@@ -1096,9 +1418,14 @@ c2q<-data.frame(ct.v, qt.v, rt.v); colnames(c2q)<-c("celltype","channel","rawfil
 c2q$channel <- gsub(".*\\.","",c2q$channel)
 
 cellenOne_c2q <- inner_join(design_cellenOne, c2q, by = c("Set" = "rawfile", "label" = "channel"))
-
+colnames(cellenOne_c2q)[17] <- 'id'
+meta <- read.csv('../dat/Proccessed_data/pSCoPE/meta.csv',row.names = 1)
+meta <- meta %>% left_join(cellenOne_c2q,by = c('id'))
+#t0 <-read.csv('/Users/andrewleduc/Desktop/nPOP_Paper/dat/Proccessed_data/t0.csv',row.names = 1)
+meta <- write.csv(meta,'../dat/Proccessed_data/pSCoPE/p_scope_meta.csv')
 
 t0 <- ev.matrix[,colnames(ev.matrix)%in% colnames(t4b)]
+t0 <- t0[,colnames(t0)%in% colnames(t4b)]
 t0_mean_ri <- as.data.frame(colMeans(t0,na.rm=T))
 t0_mean_ri$celltype <- colnames(t0)
 colnames(t0_mean_ri)[1] <- 'Mean.Intensity'
@@ -1116,13 +1443,81 @@ two <-ggplot(cellenOne_c2q,aes(y = log10(Mean.Intensity),x = diameter,color = sa
 
 ggsave("/Users/andrewleduc/Desktop/nPOP_Paper/figs/SC_QC/diamVmean.png",plot = two,width = unit(6, "cm"),height =  unit(5, "cm"))
 
+unique(pca.display$celltype)
+colnames(cellenOne_c2q)[17] <- 'id'
+meta_ <- meta %>% left_join(cellenOne_c2q, by = 'id')
+colnames(cellenOne_c2q)[17] <- 'id'
+pca.display <- pca.display %>% left_join(cellenOne_c2q,by = 'id')
+pca.display$slide <- as.character(pca.display$slide)
+pca.display_batch <- pca.display %>% filter(celltype == 'Mon_SC')
+pca.display_batch$slide <- paste0(pca.display_batch$slide,pca.display_batch$celltype)
+pca.display_batch$slide <- as.character(pca.display_batch$slide)
+pca.display_batch<- pca.display_batch %>% filter(PC1 < -.017)
+#pca.display_batch <- pca.display_batch %>% filter(PC1 < -.01)
+ggscatter(pca.display_batch, color = 'slide' ,x =PCx, y = PCy, size = 3, alpha=0.8) +
+  xlab(paste0(PCx,"  (", round(percent_var[1],0),"%)")) +
+  ylab(paste0(PCy,"  (", round(percent_var[2],0),"%)")) +
+  font("ylab",size=30) +
+  font("xlab",size=30) +
+  font("xy.text", size=20)+
+  #rremove("legend") +
+  #scale_color_manual(values = my_colors[2:3]) +
+  #annotate("text", x=-0.025, y=0.21,label="Macrophage", color=my_colors[2], size=10)  +
+  #annotate("text", x=0.03, y=0.21, label="Monocyte", color=my_colors[3], size=10) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 4)) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n = 3))
+pca.display_batch <- pca.display_batch %>% filter(PC1 > .02)
+ggplot(pca.display,aes(y=PC1))  + geom_histogram(bins = 50)+  theme_bw() +facet_wrap(~slide,ncol = 4)+ 
+  xlab("# cells")+ggtitle('Slide')+font("ylab",size=30) +font("xlab",size=30) 
+ggplot(pca.display,aes(y=PC2))  + geom_histogram()+  theme_bw() +facet_wrap(~slide,ncol = 4)#+ ylim(c(-.03,-.01))
 
-#colnames(cellenOne_c2q)[17] <- 'id'
-#meta_ <- meta %>% left_join(cellenOne_c2q, by = 'id')
+cellenOne_c2q2 <- cellenOne_c2q %>% filter(sample.x == 'm')
+cellenOne_c2q2$subPOP <- NA
+cellenOne_c2q2$subPOP[cellenOne_c2q2$celltype %in% meta_mel_C1$id] <- 'ClusterA'
+cellenOne_c2q2$subPOP[cellenOne_c2q2$celltype %in% meta_mel_C2$id] <- 'ClusterB'
 
-
+ggplot(cellenOne_c2q2,aes(y = log10(Mean.Intensity),x = diameter,,size = subPOP,color = subPOP)) + geom_point(alpha = 1) +
+  theme_bw() + coord_cartesian(ylim = c(2.5,4.2))+ xlab('') + ylab('')+
+  theme(axis.title.x = element_text(size = 30),axis.title.y = element_text(size = 26),
+        axis.text.x = element_text(size = 20),axis.text.y = element_text(size = 20))+ scale_color_manual(values = c("#dcdcdc","#808080"))+ylab(expression(Log[10]~mean~RI~signal))+scale_size_manual(values = c(2,6))
 
 ```
 
+```{r Plot peptide TIC vs contamn}
+p1 <- read.delim('/Users/andrewleduc/Downloads/Data_for_Fig_3-4_MaxQuant_txt_files/allPeptides.txt')
+p1 <- p1 %>% filter(Raw.file %in% unique(p1$Raw.file)[2:6])
+p1 <- read.delim('/Volumes/GoogleDrive/My Drive/MS/cellenONE/nPOP/nPOP_Melanoma_Monocyte/For_DO_MS/allPeptides.txt')
+
+p1$Charge[p1$Charge > 1 ] <- 2
+  
+p1$Retention.time <- floor(p1$Retention.time)
+
+p1 <- p1 %>% dplyr::group_by(Charge,Retention.time) %>% dplyr::summarise(Intensity = sum(Intensity))
+p1$Charge <- as.character(p1$Charge)
+p1$Charge[p1$Charge=='2'] <- "> +1"
+p1$Charge[p1$Charge=='1'] <- "+1"
+
+ggplot(p1,aes(x = Retention.time,y=Intensity,fill = Charge)) + 
+  geom_bar(stat="identity",alpha = .4,position = "identity")+
+  coord_cartesian(xlim = c(30,80),ylim = c(0,5e10)) + theme_bw() +
+  ggtitle("Total ion current over active gradient") + ylab('Summed Intensity per minute') + xlab('Retention Time')
+
+
+tic <- read.delim('/Users/andrewleduc/Desktop/nPOP_Paper/features.tsv')
+tic <- tic %>% filter(rtApex > 28)
+tic <- tic %>% filter(rtApex < 47)
+tic$charge[tic$charge > 1] <- 2
+
+tic$rtApex <- floor(tic$rtApex)
+tic <- tic %>% dplyr::select(rtApex,charge,intensityApex)
+tic2 <- tic %>% dplyr::group_by(charge,rtApex) %>% dplyr::summarise(Intensity = sum(intensityApex))
+
+tic2$charge <- as.character(tic2$charge)
+ggplot(tic2,aes(x = rtApex,y=Intensity,fill = charge)) + 
+  geom_bar(stat="identity",alpha = .4,position = "identity")+
+  theme_bw() +coord_cartesian(ylim = c(0,2e9)) +
+  ggtitle("Total ion current over active gradient") + ylab('Summed Intensity per minute') + xlab('Retention Time')
+
+```
 
 

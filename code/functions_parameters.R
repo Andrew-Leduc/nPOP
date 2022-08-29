@@ -959,12 +959,14 @@ Population_GSEA <- function(data,GO_db,sn){
   }
   unique_GO_terms <- unique(GO_db$GO_term_name)
 
- 
+  print(pops)
   for (i in 1:length(unique_GO_terms)){
-    
+    i=3
+    mouse=1
     GO_term <- unique_GO_terms[i]
     GO_db_lim <- GO_db %>% dplyr::filter(GO_term_name == GO_term)
     data_matches <- data %>% dplyr::filter(Protein %in% GO_db_lim$Uniprot)
+
     matches_number <- length(unique(data_matches$Protein))
     total_Proteins_in_GOterm <- length(unique(GO_db_lim$Uniprot))
     data_matches <- data_matches %>% filter(is.na(Intensity)==F)
@@ -1005,7 +1007,7 @@ Population_GSEA <- function(data,GO_db,sn){
   return(GSEA_output)
 }
 
-Population_GSEA_norm <- function(data,GO_db,sn){
+Population_GSEA_norm <- function(data,GO_db){
   
   unique_GO_terms <- unique(GO_db$GO_term_name)
   
@@ -1013,11 +1015,11 @@ Population_GSEA_norm <- function(data,GO_db,sn){
                             Cond1med_int = numeric(),Cond2med_int = numeric(),Cond3med_int = numeric())
   
   for (i in 1:length(unique_GO_terms)){
-    
     GO_term <- unique_GO_terms[i]
     GO_db_lim <- GO_db %>% dplyr::filter(GO_term_name == GO_term)
-    data_matches <- data %>% dplyr::filter(Protein %in% GO_db_lim$Uniprot)
+    data_matches <- ev_both %>% dplyr::filter(Protein %in% GO_db_lim$Uniprot)
     matches_number <- length(unique(data_matches$Protein))
+    matches_number
     total_Proteins_in_GOterm <- length(unique(GO_db_lim$Uniprot))
     data_matches <- data_matches %>% filter(is.na(Intensity)==F)
     fractionObserved <- matches_number/total_Proteins_in_GOterm
@@ -1027,8 +1029,8 @@ Population_GSEA_norm <- function(data,GO_db,sn){
     # Kruskall Wallis
     #make sure majority of samples have observations present
     
-    if(matches_number > 2 && length(unique(data_matches$Condition)) > 2 ){
-      
+    if(matches_number > 2){
+
       AOV_out <- aov(Intensity ~ Condition, data = data_matches)
       AOV_out <- summary(AOV_out)
       AOV_out <- data.frame(AOV_out[[1]])
@@ -1041,16 +1043,6 @@ Population_GSEA_norm <- function(data,GO_db,sn){
       GSEA_output[i,6]<- dataProt_matches_medInt$medianInt[dataProt_matches_medInt$Condition == 'S']
       GSEA_output[i,7]<- dataProt_matches_medInt$medianInt[dataProt_matches_medInt$Condition == 'G2']
     }
-    else{
-      pVal = NA
-    }
-    GSEA_output[i,1] <- NA
-    GSEA_output[i,2] <- NA 
-    GSEA_output[i,3] <- NA
-    GSEA_output[i,4] <- NA
-    GSEA_output[i,5]<- NA
-    GSEA_output[i,6]<- NA
-    GSEA_output[i,7]<- NA
     
   }
   return(GSEA_output)
